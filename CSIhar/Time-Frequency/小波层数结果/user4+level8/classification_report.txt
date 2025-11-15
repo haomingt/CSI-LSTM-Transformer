@@ -1,0 +1,13 @@
+              precision    recall  f1-score   support
+
+        bend     0.5556    0.6250    0.5882         8
+        fall     0.6000    0.3750    0.4615         8
+    lie_down     0.8000    1.0000    0.8889         8
+         run     0.8889    1.0000    0.9412         8
+     sitdown     0.7000    0.8750    0.7778         8
+     standup     0.6000    0.3750    0.4615         8
+        walk     0.8750    0.8750    0.8750         8
+
+    accuracy                         0.7321        56
+   macro avg     0.7171    0.7321    0.7135        56
+weighted avg     0.7171    0.7321    0.7135        56

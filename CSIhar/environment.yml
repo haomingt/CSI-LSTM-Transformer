@@ -1,0 +1,25 @@
+name: csi-har
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - pillow
+  - tqdm
+  - pyyaml
+  - opencv
+  - pip
+  - pip:
+      - rich
+      - thop

@@ -1,0 +1,58 @@
+data:
+  cache_in_memory: false
+  classes:
+  - bend
+  - fall
+  - lie_down
+  - run
+  - sitdown
+  - standup
+  - walk
+  cmap: viridis
+  file_ext: .csv
+  max_time_len: 1100
+  min_time_len: 200
+  norm_mode: per_sample
+  processed_root: ../data_processed
+  raw_root: ../data_raw_7
+  resize:
+  - 64
+  - 64
+  subcarriers: 52
+  test_split: 0.15
+  train_split: 0.75
+  use_offline_images: false
+  val_split: 0.1
+evaluation:
+  topk:
+  - 1
+  - 3
+logging:
+  out_dir: ./outputs
+  save_interval: 20
+  tqdm: true
+model:
+  dropout: 0.25
+  in_channels: 3
+  name: deeper_cnn
+seed: 2024
+training:
+  amp: true
+  batch_size: 32
+  early_stop_patience: 25
+  epochs: 120
+  gamma: 0.1
+  grad_clip: null
+  lr: 1e-3
+  lr_parsed:
+    main_base_lr: 0.001
+    warmup_target_lr: 0.001
+  main_base_lr: 0.001
+  momentum: 0.9
+  num_workers: 4
+  optimizer: adamw
+  scheduler: cosine
+  step_size: 30
+  warmup_epochs: 5
+  warmup_target_lr: 0.001
+  weight_decay: 1e-4
