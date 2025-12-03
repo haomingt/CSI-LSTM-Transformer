@@ -1,0 +1,298 @@
+% function [layers, options] = create_enhanced_network(input_size, X_val, y_val)
+%     % 创建增强的LSTM+Transformer网络
+% 
+%     lstm_units = 256;      % 增加LSTM单元
+%     dense_units = 128;     % 增加全连接层单元
+%     dropout_rate = 0.3;    % 适中的dropout
+
+    % layers = [
+    %     % 输入层
+    %     sequenceInputLayer(input_size, 'Name', 'input', 'MinLength', 1)
+    % 
+    %     % 第一层LSTM编码器
+    %     lstmLayer(lstm_units, 'OutputMode', 'sequence', 'Name', 'lstm_encoder1')
+    %     batchNormalizationLayer('Name', 'bn_encoder1')
+    %     dropoutLayer(dropout_rate, 'Name', 'dropout_encoder1')
+    % 
+    %     % 第二层LSTM编码器（注意力模拟）
+    %     lstmLayer(round(lstm_units*0.75), 'OutputMode', 'sequence', 'Name', 'lstm_encoder2')
+    %     batchNormalizationLayer('Name', 'bn_encoder2')
+    %     dropoutLayer(dropout_rate, 'Name', 'dropout_encoder2')
+    % 
+    %     % 第三层LSTM（深度特征提取）
+    %     lstmLayer(round(lstm_units*0.5), 'OutputMode', 'sequence', 'Name', 'lstm_encoder3')
+    %     batchNormalizationLayer('Name', 'bn_encoder3')
+    %     dropoutLayer(dropout_rate, 'Name', 'dropout_encoder3')
+    % 
+    %     % 注意力机制模拟（全局池化）
+    %     globalMaxPooling1dLayer('Name', 'global_attention')
+    % 
+    %     % 深度特征融合网络
+    %     fullyConnectedLayer(dense_units*2, 'Name', 'fusion_dense1')
+    %     batchNormalizationLayer('Name', 'bn_fusion1')
+    %     reluLayer('Name', 'relu_fusion1')
+    %     dropoutLayer(dropout_rate, 'Name', 'dropout_fusion1')
+    % 
+    %     fullyConnectedLayer(dense_units, 'Name', 'fusion_dense2')
+    %     batchNormalizationLayer('Name', 'bn_fusion2')
+    %     reluLayer('Name', 'relu_fusion2')
+    %     dropoutLayer(dropout_rate, 'Name', 'dropout_fusion2')
+    % 
+    %     fullyConnectedLayer(round(dense_units*0.5), 'Name', 'fusion_dense3')
+    %     batchNormalizationLayer('Name', 'bn_fusion3')
+    %     reluLayer('Name', 'relu_fusion3')
+    %     dropoutLayer(dropout_rate*0.7, 'Name', 'dropout_fusion3')
+    % 
+    %     fullyConnectedLayer(round(dense_units*0.25), 'Name', 'pre_output1')
+    %     batchNormalizationLayer('Name', 'bn_pre_output1')
+    %     reluLayer('Name', 'relu_pre_output1')
+    %     dropoutLayer(dropout_rate*0.5, 'Name', 'dropout_pre_output1')
+    % 
+    %     fullyConnectedLayer(16, 'Name', 'pre_output2')
+    %     reluLayer('Name', 'relu_pre_output2')
+    %     dropoutLayer(dropout_rate*0.3, 'Name', 'dropout_pre_output2')
+    % 
+    %     % 输出层
+    %     fullyConnectedLayer(1, 'Name', 'output')
+    %     regressionLayer('Name', 'regression')
+    % ];
+
+
+
+lstm_units   = 128;          % LSTM隐藏单元
+dModel       = 128;          % Transformer通道维度
+numHeads     = 4;            % 注意力头数（需满足 dModel % numHeads == 0）
+ffnDim       = 256;          % FFN内部维度
+numEncoders  = 3;            % Transformer Encoder 层数（Nx）
+dropout_rate = 0.2;          % Dropout
+dense_units  = 64;           % 全连接尺寸
+
+layers = [
+    % -------- 输入 --------
+    sequenceInputLayer(input_size, 'Name', 'input', 'MinLength', 1)
+
+    % -------- LSTM 前端（1~2层足够）--------
+    lstmLayer(lstm_units, 'OutputMode', 'sequence', 'Name', 'lstm1')
+    dropoutLayer(dropout_rate, 'Name', 'dropout_lstm1')
+
+    % 若需要再加一层（可选）
+    % lstmLayer(round(lstm_units*0.75), 'OutputMode', 'sequence', 'Name', 'lstm2')
+    % dropoutLayer(dropout_rate, 'Name', 'dropout_lstm2')
+
+    % -------- 投影到 dModel 并加位置编码 --------
+    fullyConnectedLayer(dModel, 'Name', 'proj_to_dModel')   % 每个时间步线性投影到 dModel
+    positionalEncoding1dLayer(dModel, 'Name', 'posenc')     % 位置编码（与第二张图一致）
+
+    % -------- Transformer Encoder × N --------
+    transformerEncoderLayer(numHeads, dModel, ffnDim, ...
+        'Name','encoder1', 'DropoutFactor', dropout_rate)
+
+    transformerEncoderLayer(numHeads, dModel, ffnDim, ...
+        'Name','encoder2', 'DropoutFactor', dropout_rate)
+
+    transformerEncoderLayer(numHeads, dModel, ffnDim, ...
+        'Name','encoder3', 'DropoutFactor', dropout_rate)
+
+    % -------- 序列汇聚（Pool）--------
+    globalAveragePooling1dLayer('Name','pool')  % 也可用 globalMaxPooling1dLayer
+
+    % -------- 输出头（回归）--------
+    fullyConnectedLayer(dense_units, 'Name', 'head_fc1')
+    reluLayer('Name','head_relu1')
+    dropoutLayer(dropout_rate, 'Name','head_dropout1')
+
+    fullyConnectedLayer(round(dense_units*0.5), 'Name', 'head_fc2')
+    reluLayer('Name','head_relu2')
+    dropoutLayer(dropout_rate*0.5, 'Name','head_dropout2')
+
+    fullyConnectedLayer(1, 'Name', 'output')
+    regressionLayer('Name','regression')
+];
+
+
+
+
+
+
+
+
+
+
+
+
+
+     % layers = [    %单纯LSTM
+     %            sequenceInputLayer(input_size, 'Name','input', 'MinLength', 1)
+     % 
+     %            lstmLayer(lstm_units, 'OutputMode','sequence', 'Name','lstm1')
+     %            batchNormalizationLayer('Name','bn1')
+     %            dropoutLayer(dropout_rate, 'Name','drop1')
+     % 
+     %            lstmLayer(round(lstm_units*0.75), 'OutputMode','sequence', 'Name','lstm2')
+     %            batchNormalizationLayer('Name','bn2')
+     %            dropoutLayer(dropout_rate, 'Name','drop2')
+     % 
+     %            % 第三层直接 'last'：输出 [C,B]，省去池化/注意力
+     %            lstmLayer(round(lstm_units*0.5), 'OutputMode','last', 'Name','lstm3_last')
+     % 
+     %            fullyConnectedLayer(dense_units*2, 'Name','fc1')
+     %            batchNormalizationLayer('Name','bn3')
+     %            reluLayer('Name','relu1')
+     %            dropoutLayer(dropout_rate, 'Name','drop3')
+     % 
+     %            fullyConnectedLayer(dense_units, 'Name','fc2')
+     %            batchNormalizationLayer('Name','bn4')
+     %            reluLayer('Name','relu2')
+     %            dropoutLayer(dropout_rate, 'Name','drop4')
+     % 
+     %            fullyConnectedLayer(round(dense_units*0.5), 'Name','fc3')
+     %            reluLayer('Name','relu3')
+     %            dropoutLayer(dropout_rate*0.7, 'Name','drop5')
+     % 
+     %            fullyConnectedLayer(16, 'Name','fc4')
+     %            reluLayer('Name','relu4')
+     %            dropoutLayer(dropout_rate*0.3, 'Name','drop6')
+     % 
+     %            fullyConnectedLayer(1, 'Name','output')
+     %            regressionLayer('Name','regression')
+     %        ];
+    % 参数
+%     options = trainingOptions('adam', ...
+%         'MaxEpochs', 50, ...
+%         'MiniBatchSize', 64, ...
+%         'InitialLearnRate', 0.01, ...
+%         'LearnRateSchedule', 'piecewise', ...
+%         'LearnRateDropFactor', 0.5, ...
+%         'LearnRateDropPeriod', 20, ...
+%         'ValidationData', {X_val, y_val}, ...
+%         'ValidationFrequency', 15, ...
+%         'L2Regularization', 1e-4, ...
+%         'GradientThreshold', 1, ...
+%         'Verbose', true, ...
+%         'VerboseFrequency', 5, ...
+%         'Shuffle', 'every-epoch', ...
+%         'ValidationPatience', 100, ...
+%         'ExecutionEnvironment', 'auto', ...
+%         'Plots', 'training-progress');
+% end
+
+
+function [layers, options] = create_enhanced_network(input_size, X_val, y_val)
+% Pure-Transformer regression network built from selfAttentionLayer blocks.
+% input_size : feature dimension per timestep
+% X_val, y_val: validation data
+
+    % ====== Hyperparameters ======
+    dModel       = 128;      % hidden size (also FFN output size)
+    numHeads     = 8;        % must divide dModel
+    ffnDim       = 4 * dModel;
+    numBlocks    = 3;        % number of encoder blocks
+    dropAttn     = 0.3;
+    dropFFN      = 0.3;
+
+    % ====== Stem: project input to dModel ======
+    lgraph = layerGraph();
+    stem = [
+        sequenceInputLayer(input_size, 'Name','input', 'MinLength',1)
+        fullyConnectedLayer(dModel, 'Name','proj')
+        layerNormalizationLayer('Name','ln_stem')
+    ];
+    lgraph = addLayers(lgraph, stem);
+
+    prevName = 'ln_stem';
+
+    % ====== Encoder Blocks ======
+    for i = 1:numBlocks
+        % names
+        ln1   = sprintf('enc%d_ln1', i);
+        sa    = sprintf('enc%d_sa',  i);
+        drop1 = sprintf('enc%d_drop_sa', i);
+        add1  = sprintf('enc%d_add1', i);
+
+        ln2   = sprintf('enc%d_ln2', i);
+        f1    = sprintf('enc%d_ffn1', i);
+        relu1 = sprintf('enc%d_relu1', i);
+        drop2 = sprintf('enc%d_drop_ffn1', i);
+        f2    = sprintf('enc%d_ffn2', i);
+        drop3 = sprintf('enc%d_drop_ffn2', i);
+        add2  = sprintf('enc%d_add2', i);
+
+        block = [
+            layerNormalizationLayer('Name', ln1)
+            selfAttentionLayer(numHeads, dModel, ...
+                'Name', sa, 'DropoutProbability', dropAttn, ...
+                'OutputSize', dModel)
+            dropoutLayer(dropAttn, 'Name', drop1)
+            additionLayer(2, 'Name', add1)
+
+            layerNormalizationLayer('Name', ln2)
+            fullyConnectedLayer(ffnDim, 'Name', f1)
+            reluLayer('Name', relu1)
+            dropoutLayer(dropFFN, 'Name', drop2)
+            fullyConnectedLayer(dModel, 'Name', f2)
+            dropoutLayer(dropFFN, 'Name', drop3)
+            additionLayer(2, 'Name', add2)
+        ];
+        lgraph = addLayers(lgraph, block);
+
+        % connections: pre-norm + residuals
+        % input -> ln1
+        lgraph = connectLayers(lgraph, prevName, ln1);
+        % skip for add1
+        lgraph = connectLayers(lgraph, prevName, [add1 '/in2']);
+        % MHA path to add1
+        lgraph = connectLayers(lgraph, drop1, [add1 '/in1']);
+
+        % add1 -> ln2
+        lgraph = connectLayers(lgraph, add1, ln2);
+        % FFN path to add2
+        lgraph = connectLayers(lgraph, drop3, [add2 '/in1']);
+        % skip from add1 to add2
+        lgraph = connectLayers(lgraph, add1, [add2 '/in2']);
+
+        prevName = add2; % output of block i
+    end
+
+    % ====== Head ======
+    head = [
+        globalAveragePooling1dLayer('Name','pool')   % stable global aggregation
+        fullyConnectedLayer(256, 'Name','head_fc1')
+        layerNormalizationLayer('Name','head_ln1')
+        reluLayer('Name','head_relu1')
+        dropoutLayer(0.3, 'Name','head_drop1')
+
+        fullyConnectedLayer(128, 'Name','head_fc2')
+        layerNormalizationLayer('Name','head_ln2')
+        reluLayer('Name','head_relu2')
+        dropoutLayer(0.2, 'Name','head_drop2')
+
+        fullyConnectedLayer(32, 'Name','pre_output')
+        reluLayer('Name','pre_relu')
+        fullyConnectedLayer(1, 'Name','output')
+        regressionLayer('Name','regression')
+    ];
+    lgraph = addLayers(lgraph, head);
+    lgraph = connectLayers(lgraph, prevName, 'pool');
+
+    layers = lgraph;
+
+    % ====== Training Options ======
+    options = trainingOptions('adam', ...
+        'MaxEpochs', 50, ...
+        'MiniBatchSize', 64, ...
+        'InitialLearnRate', 1e-3, ...
+        'LearnRateSchedule', 'piecewise', ...
+        'LearnRateDropFactor', 0.5, ...
+        'LearnRateDropPeriod', 20, ...
+        'ValidationData', {X_val, y_val}, ...
+        'ValidationFrequency', 15, ...
+        'L2Regularization', 1e-4, ...
+        'GradientThreshold', 1, ...
+        'Verbose', true, ...
+        'VerboseFrequency', 5, ...
+        'Shuffle', 'every-epoch', ...
+        'ValidationPatience', 100, ...
+        'ExecutionEnvironment', 'auto', ...
+        'Plots', 'training-progress');
+end
+

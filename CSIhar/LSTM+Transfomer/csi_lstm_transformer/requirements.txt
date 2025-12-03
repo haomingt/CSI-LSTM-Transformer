@@ -1,8 +1,0 @@
-torch==2.7.0        # PyTorch 稳定版本 :contentReference[oaicite:0]{index=0}
-numpy==2.3.5        # 最新稳定 NumPy :contentReference[oaicite:1]{index=1}
-pandas==2.3.3       # 最新稳定 Pandas :contentReference[oaicite:2]{index=2}
-scikit-learn==1.7.2 # 最新稳定 scikit‑learn :contentReference[oaicite:3]{index=3}
-matplotlib==3.8.2   # 设置常用版本（你可以根据需要调整）
-seaborn==0.12.2     # 设置比较稳定版本
-tqdm==4.66.1        # 常用进度条版本
-pyyaml==6.0         # YAML 解析库
