@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset
 import pandas as pd
 from .utils import haar_wavelet_decompose, haar_wavelet_reconstruct
-
+from scipy.signal import stft
 
 def load_csi_file(path: str) -> np.ndarray:
     """加载CSI文件，支持csv和npy格式"""
@@ -17,9 +17,8 @@ def load_csi_file(path: str) -> np.ndarray:
         raise ValueError(f"不支持的文件格式: {ext}")
     return data.astype(np.float32)
 
-
 def interpolate_adjust_length(mat: np.ndarray, target_len: int) -> np.ndarray:
-    """调整时间序列长度，使用插值方法保持数据分布"""
+    """调整时间序列长度"""
     T, F = mat.shape
     if T == target_len:
         return mat
@@ -30,38 +29,43 @@ def interpolate_adjust_length(mat: np.ndarray, target_len: int) -> np.ndarray:
         from scipy.interpolate import interp1d
         interpolator = interp1d(
             original_time, mat[:, f],
-            kind='linear',
-            bounds_error=False,
-            fill_value="extrapolate"
+            kind='linear', bounds_error=False, fill_value="extrapolate"
         )
         adjusted[:, f] = interpolator(target_time)
     return adjusted
 
-
 def wavelet_denoise_csi(raw_mat: np.ndarray, level: int = 4, threshold_mode: str = 'soft') -> np.ndarray:
-    """对CSI数据进行小波去噪处理"""
+    """小波去噪"""
     T, F = raw_mat.shape
     denoised = np.zeros_like(raw_mat)
     for f in range(F):
         coeffs = haar_wavelet_decompose(raw_mat[:, f], level)
         cA = coeffs[0]
         cD_list = coeffs[1:]
-
-        # 计算阈值
         threshold = np.median(np.abs(cD_list[-1])) * 2
-
-        # 应用阈值
         denoised_cD = []
         for cd in cD_list:
             if threshold_mode == 'soft':
                 denoised_cd = np.sign(cd) * np.maximum(np.abs(cd) - threshold, 0)
-            else:  # hard
+            else:
                 denoised_cd = np.where(np.abs(cd) < threshold, 0, cd)
             denoised_cD.append(denoised_cd)
-
         denoised[:, f] = haar_wavelet_reconstruct([cA] + denoised_cD)[:T]
     return denoised
 
+def apply_stft(csi: np.ndarray, nperseg=32, noverlap=16) -> np.ndarray:
+    """对 CSI 数据做短时傅里叶变换，返回幅度谱"""
+    T, F = csi.shape
+    stft_result = []
+    for f in range(F):
+        _, _, Zxx = stft(csi[:, f], nperseg=nperseg, noverlap=noverlap)
+        stft_result.append(np.abs(Zxx))
+    # 结果形状 (freq_bins, time_steps, subcarriers)
+    stft_result = np.stack(stft_result, axis=-1)  # (freq_bins, time_steps, F)
+    # reshape 为 (time_steps, freq_bins * F)
+    time_steps = stft_result.shape[1]
+    stft_result = stft_result.transpose(1, 0, 2).reshape(time_steps, -1)
+    return stft_result.astype(np.float32)
 
 class CSIDataset(Dataset):
     def __init__(self, files: list, class_to_idx: dict,
@@ -70,7 +74,8 @@ class CSIDataset(Dataset):
                  cache: bool = True,
                  use_wavelet: bool = True,
                  wavelet_level: int = 4,
-                 wavelet_threshold_mode: str = 'soft'):
+                 wavelet_threshold_mode: str = 'soft',
+                 use_stft: bool = True):
         self.files = files
         self.class_to_idx = class_to_idx
         self.target_time_len = (max_time_len + min_time_len) // 2
@@ -78,10 +83,10 @@ class CSIDataset(Dataset):
         self.augment = augment
         self.cache = cache
         self._cache = {}
-
         self.use_wavelet = use_wavelet
         self.wavelet_level = wavelet_level
         self.wavelet_threshold_mode = wavelet_threshold_mode
+        self.use_stft = use_stft
 
         if self.cache:
             self._preprocess_all()
@@ -92,27 +97,19 @@ class CSIDataset(Dataset):
             try:
                 csi = load_csi_file(f)
                 if csi.shape[1] != self.subcarriers:
-                    raise ValueError(
-                        f"子载波数量不匹配在文件 {f}: 预期 {self.subcarriers}, 实际 {csi.shape[1]}"
-                    )
-
+                    raise ValueError(f"子载波数量不匹配在文件 {f}")
                 if self.use_wavelet:
-                    csi = wavelet_denoise_csi(
-                        csi,
-                        level=self.wavelet_level,
-                        threshold_mode=self.wavelet_threshold_mode
-                    )
-
+                    csi = wavelet_denoise_csi(csi, level=self.wavelet_level, threshold_mode=self.wavelet_threshold_mode)
                 # 幅值归一化
                 csi = (csi - csi.mean()) / (csi.std() + 1e-8)
-
-                csi_aligned = interpolate_adjust_length(csi, self.target_time_len)
-                self._cache[f] = csi_aligned
+                if self.use_stft:
+                    csi = apply_stft(csi)
+                csi = interpolate_adjust_length(csi, self.target_time_len)
+                self._cache[f] = csi
             except Exception as e:
                 print(f"处理文件 {f} 时出错: {e}")
 
     def _get_label(self, path: str) -> int:
-        """从文件路径中提取标签"""
         parts = os.path.normpath(path).split(os.sep)
         for p in reversed(parts):
             if p in self.class_to_idx:
@@ -131,12 +128,10 @@ class CSIDataset(Dataset):
         else:
             csi = load_csi_file(fpath)
             if self.use_wavelet:
-                csi = wavelet_denoise_csi(
-                    csi,
-                    level=self.wavelet_level,
-                    threshold_mode=self.wavelet_threshold_mode
-                )
+                csi = wavelet_denoise_csi(csi, level=self.wavelet_level, threshold_mode=self.wavelet_threshold_mode)
             csi = (csi - csi.mean()) / (csi.std() + 1e-8)
+            if self.use_stft:
+                csi = apply_stft(csi)
             csi = interpolate_adjust_length(csi, self.target_time_len)
 
         # 数据增强

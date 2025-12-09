@@ -2,18 +2,17 @@ import torch
 import torch.nn as nn
 
 class LSTMTransformer(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_heads, num_layers,
-                 num_classes, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, num_heads, num_layers, num_classes, dropout=0.2):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
 
         self.lstm = nn.LSTM(
-            input_size=input_dim,  # subcarriers*2
+            input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
-            dropout=dropout,
+            dropout=dropout if num_layers > 1 else 0.0,
             bidirectional=True
         )
 

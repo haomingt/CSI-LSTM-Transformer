@@ -1,16 +1,10 @@
 import os
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
 from tqdm import tqdm
-import numpy as np
-# 新增：导入utils中的报告和绘图函数
 from .utils import generate_classification_report, plot_confusion_matrix
 
-
 def train_one_epoch(model, train_loader, device, criterion, optimizer, scaler, epoch, warmup_steps):
-    """训练单个epoch"""
+    """训练一个 epoch"""
     model.train()
     total_loss = 0.0
     total_correct = 0
@@ -29,7 +23,7 @@ def train_one_epoch(model, train_loader, device, criterion, optimizer, scaler, e
                 param_group['lr'] = lr
 
         optimizer.zero_grad()
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
+        with torch.amp.autocast(device_type='cuda', enabled=scaler is not None):
             outputs = model(data)
             loss = criterion(outputs, labels)
 
@@ -52,11 +46,13 @@ def train_one_epoch(model, train_loader, device, criterion, optimizer, scaler, e
             acc=f"{total_correct / total_samples * 100:.2f}%"
         )
 
-    return total_loss / total_samples, total_correct / total_samples * 100
-
+    avg_loss = total_loss / total_samples
+    avg_acc = total_correct / total_samples * 100
+    return avg_loss, avg_acc
 
 @torch.no_grad()
 def evaluate(model, loader, device, criterion, classes=None, save_path=None):
+    """验证/测试模型"""
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -82,13 +78,10 @@ def evaluate(model, loader, device, criterion, classes=None, save_path=None):
     avg_loss = total_loss / total_samples
     avg_acc = total_correct / total_samples * 100
 
-    # 生成分类报告和混淆矩阵（如果传入classes和save_path）
     report = None
     if classes is not None and save_path is not None:
         os.makedirs(save_path, exist_ok=True)
-        # 生成分类报告
         report = generate_classification_report(all_labels, all_preds, classes, save_path)
-        # 绘制混淆矩阵
         plot_confusion_matrix(all_labels, all_preds, classes, save_path)
 
     return avg_loss, avg_acc, all_preds, all_labels, report
