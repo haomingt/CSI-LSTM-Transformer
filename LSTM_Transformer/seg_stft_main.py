@@ -11,57 +11,63 @@ from email.utils import formatdate
 from email import encoders
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sklearn.metrics import recall_score
+from sklearn.metrics import accuracy_score
 import warnings
 warnings.filterwarnings('ignore')
 
 from src.dataset import CSIDataset
 from src.model_LSTMTransformer import LSTMTransformer
-from src.train import evaluate
 from src.utils import set_seed, collect_files, split_dataset
 
-# ===================== 邮箱配置 =====================
+# ===================== 邮箱 =====================
 SMTP_SERVER = "smtp.qq.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "2825493439@qq.com"
 SENDER_PASSWORD = "ozvctjacpnfgdehe"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
-# ===================== 显卡 =====================
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+# ===================== 🔥 双显卡加速 =====================
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # 启用两张显卡
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# ===================== 你要的 20组 经典STFT参数 =====================
+# ===================== 20组STFT参数 =====================
 STFT_PARAMS = [
-    (8, 4),
-    (10, 5),
-    (16, 8),
-    (24, 12),
-    (32, 16),
-    (48, 24),
-    (64, 32),
-    (72, 36),
-    (96, 48),
-    (128, 64),
-    (4, 1),
-    (4, 2),
-    (8, 2),
-    (10, 3),
-    (12, 4),
-    (12, 6),
-    (16, 4),
-    (20, 5),
-    (20, 10),
-    (64, 16),
+    (2, 0), (2, 1),
+    (4, 1), (4, 2),
+    (8, 2), (8, 4),
+    (10, 3), (10, 5),
+    (12, 4), (12, 6),
+    (16, 4), (16, 8),
+    (20, 5), (20, 10),
+    (24, 8), (24, 12),
+    (32, 8), (32, 16),
+    (48, 16), (48, 24),
+    (64, 16), (64, 32),
 ]
 
 EXCEL_PATH = "stft_ablation_result.xlsx"
-EPOCHS = 1000        # 睡觉狂跑1000轮
-PATIENCE = 30        # 30轮不提升自动停
+EPOCHS = 1000
+PATIENCE = 800
 
-# 启动清空旧表
 if os.path.exists(EXCEL_PATH):
     os.remove(EXCEL_PATH)
+
+# ===================== 评估函数 =====================
+def evaluate_full(model, loader, device):
+    model.eval()
+    y_true = []
+    y_pred = []
+    with torch.no_grad():
+        for data, lab in loader:
+            data, lab = data.to(device), lab.to(device)
+            out = model(data)
+            pred = torch.argmax(out, dim=1)
+            y_true.append(lab.cpu().numpy())
+            y_pred.append(pred.cpu().numpy())
+    y_true = np.concatenate(y_true)
+    y_pred = np.concatenate(y_pred)
+    acc = accuracy_score(y_true, y_pred)
+    return 0.0, acc, y_true, y_pred
 
 def send_email_with_attachment(subject, body, attachment_path):
     try:
@@ -71,110 +77,72 @@ def send_email_with_attachment(subject, body, attachment_path):
         msg['Date'] = formatdate(localtime=True)
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
         part = MIMEBase('application', 'octet-stream')
         with open(attachment_path, 'rb') as f:
             part.set_payload(f.read())
         encoders.encode_base64(part)
         part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(attachment_path)}"')
         msg.attach(part)
-
         server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
         server.quit()
-        print("📩 邮件已发送！")
-    except Exception as e:
-        print("邮件发送失败", e)
+        print("📩 邮件发送成功")
+    except:
+        print("邮件发送失败")
 
 def save_result_to_excel(results, excel_path):
-    df = pd.DataFrame(results)
-    df.to_excel(excel_path, index=False)
+    pd.DataFrame(results).to_excel(excel_path, index=False)
 
 def main():
     with open("configs/config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     set_seed(cfg["seed"])
-
     classes = cfg["data"]["classes"]
     class_to_idx = {c:i for i,c in enumerate(classes)}
     grouped_files = collect_files(cfg["data"]["raw_root"], classes, cfg["data"]["file_ext"])
-    train_files, val_files, test_files = split_dataset(
-        grouped_files,
-        cfg["data"]["train_split"],
-        cfg["data"]["val_split"],
-        cfg["data"]["test_split"],
-        cfg["seed"]
-    )
-
+    train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
     results = []
 
     for idx, (nseg, novl) in enumerate(STFT_PARAMS, 1):
         print(f"\n==================================================")
-        print(f"🚀 第 {idx}/{len(STFT_PARAMS)} 组 | STFT = ({nseg}, {novl})")
+        print(f"🚀 第 {idx}/20 组 | STFT=({nseg},{novl}) | 双显卡训练")
+        print(f"==================================================")
 
-        # ✅ 完全按你的格式修复，不报错
-        train_ds = CSIDataset(
-            train_files, class_to_idx,
-            max_time_len=cfg["data"]["max_time_len"],
+        BEST_MODEL_PATH = f"best_model_{nseg}_{novl}.pth"
+
+        train_ds = CSIDataset(train_files, class_to_idx,
             min_time_len=cfg["data"]["min_time_len"],
-            subcarriers=cfg["data"]["subcarriers"],
-            augment=True,
-            cache=cfg["data"]["cache_in_memory"],
-            use_wavelet=cfg["data"]["use_wavelet"],
-            wavelet_level=cfg["data"]["wavelet_level"],
-            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-            use_stft=True,
-            nperseg=nseg,
-            noverlap=novl
-        )
-
-        val_ds = CSIDataset(
-            val_files, class_to_idx,
             max_time_len=cfg["data"]["max_time_len"],
-            min_time_len=cfg["data"]["min_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            augment=False,
-            cache=cfg["data"]["cache_in_memory"],
-            use_wavelet=cfg["data"]["use_wavelet"],
-            wavelet_level=cfg["data"]["wavelet_level"],
-            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-            use_stft=True,
-            nperseg=nseg,
-            noverlap=novl
-        )
-
-        test_ds = CSIDataset(
-            test_files, class_to_idx,
+            use_stft=True, nperseg=nseg, noverlap=novl)
+        val_ds = CSIDataset(val_files, class_to_idx,
+            min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
-            min_time_len=cfg["data"]["min_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            augment=False,
-            cache=cfg["data"]["cache_in_memory"],
-            use_wavelet=cfg["data"]["use_wavelet"],
-            wavelet_level=cfg["data"]["wavelet_level"],
-            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-            use_stft=True,
-            nperseg=nseg,
-            noverlap=novl
-        )
+            use_stft=True, nperseg=nseg, noverlap=novl)
+        test_ds = CSIDataset(test_files, class_to_idx,
+            min_time_len=cfg["data"]["min_time_len"],
+            max_time_len=cfg["data"]["max_time_len"],
+            subcarriers=cfg["data"]["subcarriers"],
+            use_stft=True, nperseg=nseg, noverlap=novl)
 
-        train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=0)
-        test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=0)
+        train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
+        test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
 
         model = LSTMTransformer(
-            input_dim=train_ds.feature_dim,
+            input_dim=train_ds[0][0].shape[1],
             hidden_dim=cfg["models"]["lstm_transformer"]["hidden_dim"],
             num_heads=cfg["models"]["lstm_transformer"]["num_heads"],
             num_layers=cfg["models"]["lstm_transformer"]["num_layers"],
-            num_classes=len(classes),
-            dropout=cfg["models"]["lstm_transformer"]["dropout"]
-        )
-
+            num_classes=7,
+            dropout=cfg["models"]["lstm_transformer"]["dropout"])
+        
+        # ===================== 🔥 启用双显卡 =====================
         if torch.cuda.device_count() > 1:
-            model = torch.nn.DataParallel(model)
-        model = model.to(DEVICE)
+            model = torch.nn.DataParallel(model)  # 多卡并行
+        model.to(DEVICE)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]))
         criterion = torch.nn.CrossEntropyLoss()
@@ -184,55 +152,63 @@ def main():
 
         for epoch in range(EPOCHS):
             model.train()
-            for data, lab in train_loader:
+            total_loss = 0.0
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
+            for data, lab in pbar:
                 data, lab = data.to(DEVICE), lab.to(DEVICE)
                 optimizer.zero_grad()
                 out = model(data)
                 loss = criterion(out, lab)
                 loss.backward()
                 optimizer.step()
+                total_loss += loss.item()
 
-            # 验证
-            v_loss, v_acc, _, _, _ = evaluate(model, val_loader, DEVICE, criterion)
-            print(f"Epoch {epoch+1:>3} | Val Acc: {v_acc:.4f}")
+            avg_loss = total_loss / len(train_loader)
+            _, v_acc, _, _ = evaluate_full(model, val_loader, DEVICE)
+            print(f"Epoch {epoch+1} | loss={avg_loss:.4f} | val_acc={v_acc:.4f}")
 
             if v_acc > best_acc:
                 best_acc = v_acc
                 patience = 0
-                torch.save(model.state_dict(), f"best_model_{nseg}_{novl}.pth")
+                torch.save(model.state_dict(), BEST_MODEL_PATH)
+                print(f"✅ 最优模型已保存：{BEST_MODEL_PATH}")
             else:
                 patience += 1
                 if patience >= PATIENCE:
-                    print(f"\n⏸️ 连续 {PATIENCE} 轮无提升，自动停止！")
+                    print("🛑 早停")
                     break
 
-        # 测试
-        t_loss, t_acc, y_true, y_pred, _ = evaluate(model, test_loader, DEVICE, criterion)
-        recall = recall_score(y_true, y_pred, average=None, zero_division=0)
+        model.load_state_dict(torch.load(BEST_MODEL_PATH))
+        _, t_total_acc, y_true, y_pred = evaluate_full(model, test_loader, DEVICE)
+
+        def get_acc(cls):
+            mask = y_true == cls
+            if not np.any(mask):
+                return 0.0
+            return round(accuracy_score(y_true[mask], y_pred[mask]), 4)
 
         row = {
             "nperseg": nseg,
             "noverlap": novl,
-            "Acc": round(t_acc, 4),
-            "walk": round(recall[0], 4),
-            "run": round(recall[1], 4),
-            "sitdown": round(recall[2], 4),
-            "standup": round(recall[3], 4),
-            "fall": round(recall[4], 4),
-            "lie_down": round(recall[5], 4),
-            "bend": round(recall[6], 4)
+            "total_acc": round(t_total_acc, 4),
+            "walk": get_acc(0),
+            "run": get_acc(1),
+            "sitdown": get_acc(2),
+            "standup": get_acc(3),
+            "fall": get_acc(4),
+            "lie_down": get_acc(5),
+            "bend": get_acc(6)
         }
         results.append(row)
         save_result_to_excel(results, EXCEL_PATH)
 
         send_email_with_attachment(
-            f"【毕设进度】第{idx}组完成 STFT({nseg},{novl})",
-            f"总精度 Acc = {t_acc:.4f}\n已自动保存Excel",
+            f"实验{idx}/20完成 | Acc={t_total_acc:.4f}",
+            f"STFT({nseg},{novl}) 已完成",
             EXCEL_PATH
         )
 
-    send_email_with_attachment("✅ 全部20组STFT实验完成！", "快去写论文！", EXCEL_PATH)
-    print("\n🎉 所有实验全部跑完！！！")
+    send_email_with_attachment("✅ 全部20组实验完成！", "最终表格已生成", EXCEL_PATH)
 
 if __name__ == "__main__":
     main()
