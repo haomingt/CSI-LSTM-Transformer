@@ -1,0 +1,43 @@
+data:
+  raw_root: "../data_raw_3"
+  processed_root: "./data/processed"
+  file_ext: ".csv"
+  classes: ["walk", "run", "sitdown", "standup", "fall", "lie_down", "bend"]  # 7个动作类别
+  subcarriers: 52  # CSI数据有52个子载波
+  max_time_len: 1100
+  min_time_len: 200
+  use_wavelet: true
+  wavelet_level: 4
+  wavelet_threshold_mode: 'soft'
+  norm_mode: "per_sample"
+  train_split: 0.75
+  val_split: 0.1
+  test_split: 0.15
+  cache_in_memory: True
+
+model:
+  name: "lstm"              # LSTM 专用
+  input_dim: 52             # 子载波数量
+  hidden_dim: 128           # 调整隐藏单元，提高表示能力
+  num_layers: 2             # LSTM 层数调为2层，更强建模能力
+  dropout: 0.3              # dropout略微调大，防止过拟合
+  num_classes: 7
+
+training:
+  epochs: 150               # 适当减少训练轮次，加快训练
+  batch_size: 64            # 增加batch_size，提高训练速度
+  lr: 0.0005                # 调低学习率，让训练更稳定
+  optimizer: "adamw"
+  scheduler: "cosine"
+  warmup_epochs: 5
+  weight_decay: 1e-4
+  early_stop_patience: 50   # 早停策略，防止过拟合
+  amp: True
+  grad_clip: 5.0
+
+logging:
+  out_dir: "./outputs"
+  tqdm: True
+  save_interval: 5           # 每5个epoch保存一次模型
+
+seed: 2024

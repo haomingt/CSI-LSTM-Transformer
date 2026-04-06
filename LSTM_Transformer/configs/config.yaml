@@ -1,0 +1,49 @@
+data:
+  raw_root: "../data_raw_1"
+  processed_root: "./data/processed"
+  file_ext: ".csv"
+
+  classes: ["walk", "run", "sitdown", "standup", "fall", "lie_down", "bend"]
+  subcarriers: 52
+
+  max_time_len: 1100
+  min_time_len: 200
+
+  use_wavelet: true
+  wavelet_level: 4
+  wavelet_threshold_mode: "soft"
+  norm_mode: "per_sample"
+
+  train_split: 0.75
+  val_split: 0.1
+  test_split: 0.15
+  cache_in_memory: true
+
+training:
+  epochs: 200
+  batch_size: 100
+  lr: 0.0005
+  optimizer: "adamw"
+  scheduler: "cosine"
+  warmup_epochs: 5
+  weight_decay: 1e-4
+  early_stop_patience: 50
+  amp: true
+  grad_clip: 5.0
+
+models:
+  lstm_transformer:
+    name: "lstm_transformer"
+    input_dim: 52
+    hidden_dim: 100
+    num_layers: 1
+    num_heads: 2
+    dropout: 0.2
+    num_classes: 7
+
+logging:
+  out_dir: "./outputs"
+  tqdm: true
+  save_interval: 10
+
+seed: 2024
