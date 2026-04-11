@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 from email.utils import formatdate
 from email import encoders
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report
 import warnings
 warnings.filterwarnings('ignore')
