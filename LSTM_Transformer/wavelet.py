@@ -27,28 +27,17 @@ SENDER_PASSWORD = "ozvctjacpnfgdehe"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
 # ===================== 🔥 双显卡加速 =====================
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # 启用两张显卡
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# ===================== 20组STFT参数 =====================
+# ===================== STFT参数 =====================
 STFT_PARAMS = [
-    (2, 0),
-      (2, 1),
-    (4, 1), (4, 2),
-    (8, 2), (8, 4),
-    (10, 3), (10, 5),
-    (12, 4), (12, 6),
-    (16, 4), (16, 8),
-    (20, 5), (20, 10),
-    (24, 8), (24, 12),
-    (32, 8), (32, 16),
-    (48, 16), (48, 24),
-    (64, 16), (64, 32),
+    (2, 1),
 ]
 
-EXCEL_PATH = "stft_ablation_result.xlsx"
-EPOCHS = 1000
-PATIENCE = 800
+EXCEL_PATH = "stft_ablation_WAVELET.xlsx"  # 无小波结果表
+EPOCHS = 200
+PATIENCE = 1000
 
 if os.path.exists(EXCEL_PATH):
     os.remove(EXCEL_PATH)
@@ -105,29 +94,38 @@ def main():
     train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
     results = []
 
+    # ===================== ✅ 固定：有小波变换 =====================
+    use_wavelet = True
+    wave_label = "有小波变换"
+
     for idx, (nseg, novl) in enumerate(STFT_PARAMS, 1):
         print(f"\n==================================================")
-        print(f"🚀 第 {idx}/20 组 | STFT=({nseg},{novl}) | 双显卡训练")
+        print(f" 第 {idx}/22 组 | STFT=({nseg},{novl}) | {wave_label} | 双显卡")
         print(f"==================================================")
 
-        BEST_MODEL_PATH = f"best_model_{nseg}_{novl}.pth"
+        BEST_MODEL_PATH = f"best_no_wavelet_{nseg}_{novl}.pth"
 
         train_ds = CSIDataset(train_files, class_to_idx,
+                              use_wavelet=True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
+            use_stft=True, nperseg=nseg, noverlap=novl
+             )  
         val_ds = CSIDataset(val_files, class_to_idx,
+                            use_wavelet=True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
+            use_stft=True, nperseg=nseg, noverlap=novl
+            )  
         test_ds = CSIDataset(test_files, class_to_idx,
+                              use_wavelet=True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
-
+            use_stft=True, nperseg=nseg, noverlap=novl
+           )  
         train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
         val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
         test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
@@ -140,9 +138,8 @@ def main():
             num_classes=7,
             dropout=cfg["models"]["lstm_transformer"]["dropout"])
         
-        # ===================== 🔥 启用双显卡 =====================
         if torch.cuda.device_count() > 1:
-            model = torch.nn.DataParallel(model)  # 多卡并行
+            model = torch.nn.DataParallel(model)
         model.to(DEVICE)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]))
@@ -191,6 +188,7 @@ def main():
         row = {
             "nperseg": nseg,
             "noverlap": novl,
+            "wavelet": "NO",
             "total_acc": round(t_total_acc, 4),
             "walk": get_acc(0),
             "run": get_acc(1),
@@ -204,12 +202,16 @@ def main():
         save_result_to_excel(results, EXCEL_PATH)
 
         send_email_with_attachment(
-            f"实验{idx}/20完成 | Acc={t_total_acc:.4f}",
-            f"STFT({nseg},{novl}) 已完成",
+            f"【有小波】实验{idx}/22完成 | Acc={t_total_acc:.4f}",
+            f"STFT({nseg},{novl}) | 有小波变换 | 已完成",
             EXCEL_PATH
         )
 
-    send_email_with_attachment("✅ 全部20组实验完成！", "最终表格已生成", EXCEL_PATH)
+    send_email_with_attachment(
+        "✅ 全部22组实验完成！【有小波变换】",
+        "STFT消融实验（有小波）全部完成",
+        EXCEL_PATH
+    )
 
 if __name__ == "__main__":
     main()

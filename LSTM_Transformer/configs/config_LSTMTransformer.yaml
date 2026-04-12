@@ -20,21 +20,21 @@ data:
 model:
   name: "lstm_transformer"
   input_dim: 52              # 子载波数量
-  hidden_dim: 100
+  hidden_dim: 128            # LSTM隐藏层维度
   num_heads: 2
   num_layers: 1
   dropout: 0.2
   num_classes: 7
 
 training:
-  epochs: 200
+  epochs: 1000
   batch_size: 100
   lr: 0.0005
   optimizer: "adamw"
   scheduler: "cosine"
   warmup_epochs: 5
   weight_decay: 1e-4
-  early_stop_patience: 50
+  early_stop_patience: 800
   amp: True
   grad_clip: 5.0
 

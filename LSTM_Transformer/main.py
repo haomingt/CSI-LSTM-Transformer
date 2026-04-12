@@ -1,28 +1,33 @@
 import os
 import yaml
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
+from sklearn.metrics import recall_score, precision_score, f1_score, classification_report
 
 from src.dataset import CSIDataset
 from src.model_LSTMTransformer import LSTMTransformer
 from src.train import train_one_epoch, evaluate
 from src.utils import set_seed, collect_files, split_dataset
 from src.model_LSTM import LSTMModel
-
+from src.model_LSTMGMP import LSTM_GMP
+from src.utils import set_seed, collect_files, split_dataset
 def main():
     # -----------------------
     # 1. 读取配置
     # -----------------------
-    a = 0 # 0为LSTM，1加LSTM+Transformer
+    a = 1 # 0为LSTM，1加LSTM+Transformer ,2为LSTM+GMP
     text = "configs/config_LSTM.yaml" if a == 0 else "configs/config_LSTMTransformer.yaml"
+    if a == 2:
+        text = "configs/config_LSTMGMP.yaml"
     with open(text, 'r', encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    set_seed(cfg['seed'])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"使用设备: {device}")
-
-    os.makedirs(cfg['logging']['out_dir'], exist_ok=True)
+    set_seed(cfg["seed"])
+    classes = cfg["data"]["classes"]
+    class_to_idx = {c:i for i,c in enumerate(classes)}
+    grouped_files = collect_files(cfg["data"]["raw_root"], classes, cfg["data"]["file_ext"])
+    train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
 
     # -----------------------
     # 2. 数据准备
@@ -44,98 +49,84 @@ def main():
         cfg['seed'],
     )
 
-    # 训练集
-    train_ds = CSIDataset(
-        train_files, class_to_idx,
-        max_time_len=cfg['data']['max_time_len'],
-        min_time_len=cfg['data']['min_time_len'],
-        subcarriers=cfg['data']['subcarriers'],
-        augment=True,
-        cache=cfg['data']['cache_in_memory'],
-        use_wavelet=cfg['data']['use_wavelet'],
-        wavelet_level=cfg['data']['wavelet_level'],
-        wavelet_threshold_mode=cfg['data']['wavelet_threshold_mode'],
-        use_stft=True
-    )
+        # ===================== 【仅修改：数据预处理 + 训练验证测试逻辑】 =====================
+    nseg = 2
+    novl = 1
+    train_ds = CSIDataset(train_files, class_to_idx,
+            min_time_len=cfg["data"]["min_time_len"],
+            max_time_len=cfg["data"]["max_time_len"],
+            subcarriers=cfg["data"]["subcarriers"],
+            use_wavelet=cfg["data"]["use_wavelet"],
+            wavelet_level=cfg["data"]["wavelet_level"],
+            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
+            use_stft=True,
+            nperseg=nseg,
+            noverlap=novl
+        )
 
-    # 验证集
-    val_ds = CSIDataset(
-        val_files, class_to_idx,
-        max_time_len=cfg['data']['max_time_len'],
-        min_time_len=cfg['data']['min_time_len'],
-        subcarriers=cfg['data']['subcarriers'],
-        augment=False,
-        cache=cfg['data']['cache_in_memory'],
-        use_wavelet=cfg['data']['use_wavelet'],
-        wavelet_level=cfg['data']['wavelet_level'],
-        wavelet_threshold_mode=cfg['data']['wavelet_threshold_mode'],
-        use_stft=True
-    )
+    val_ds = CSIDataset(val_files, class_to_idx,
+            min_time_len=cfg["data"]["min_time_len"],
+            max_time_len=cfg["data"]["max_time_len"],
+            subcarriers=cfg["data"]["subcarriers"],
+            use_wavelet=cfg["data"]["use_wavelet"],
+            wavelet_level=cfg["data"]["wavelet_level"],
+            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
+            use_stft=True,
+            nperseg=nseg,
+            noverlap=novl
+        )
 
-    # 测试集（为了训练后测试）
-    test_ds = CSIDataset(
-        test_files, class_to_idx,
-        max_time_len=cfg['data']['max_time_len'],
-        min_time_len=cfg['data']['min_time_len'],
-        subcarriers=cfg['data']['subcarriers'],
-        augment=False,
-        cache=cfg['data']['cache_in_memory'],
-        use_wavelet=cfg['data']['use_wavelet'],
-        wavelet_level=cfg['data']['wavelet_level'],
-        wavelet_threshold_mode=cfg['data']['wavelet_threshold_mode'],
-        use_stft=True
-    )
+    test_ds = CSIDataset(test_files, class_to_idx,
+            min_time_len=cfg["data"]["min_time_len"],
+            max_time_len=cfg["data"]["max_time_len"],
+            subcarriers=cfg["data"]["subcarriers"],
+            use_wavelet=cfg["data"]["use_wavelet"],
+            wavelet_level=cfg["data"]["wavelet_level"],
+            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
+            use_stft=True,
+            nperseg=nseg,
+            noverlap=novl
+        )
 
-    train_loader = DataLoader(train_ds, 
-                              batch_size=cfg['training']['batch_size'], 
-                               num_workers=4,        # ★关键
-                               pin_memory=True,      # ★关键（GPU）
-                              shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg['training']['batch_size'], shuffle=False)
-    test_loader = DataLoader(test_ds, batch_size=cfg['training']['batch_size'], shuffle=False)
+    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
+ 
 
     # -----------------------
     # 3. 动态确定 STFT 后的输入维度
     # -----------------------
     sample_input, _ = train_ds[0]
-    input_dim = sample_input.shape[1]   # (T, freq_bins) → freq_bins 是输入维度
+    input_dim1 = sample_input.shape[1]   # (T, freq_bins) → freq_bins 是输入维度
 
     # -----------------------
     # 4. 初始化模型
     # -----------------------
-   
-
     if a == 0:
-
-        sample_input, _ = train_ds[0]  # (time_steps, 416)
-        input_dim = sample_input.shape[1]  # 416
         model = LSTMModel(
-            input_dim=input_dim,
-            hidden_dim=128,
-            num_layers=2,
-            dropout=0.3,
-            num_classes=7
-            ).to(device)
-
-
-    model = LSTMModel(
-    input_dim=input_dim,
-    hidden_dim=cfg['model']['hidden_dim'],
-    num_layers=cfg['model']['num_layers'],
-    num_classes=cfg['model']['num_classes'],
-    dropout=cfg['model']['dropout']).to(device)
-
-    if a == 1:
+            input_dim=input_dim1,
+            hidden_dim=cfg['model']['hidden_dim'],
+            num_layers=cfg['model']['num_layers'],
+            num_classes=cfg['model']['num_classes'],
+            dropout=cfg['model']['dropout']
+        ).to(device)
+    elif a == 1:
         model = LSTMTransformer(
-        input_dim=input_dim,
-        hidden_dim=cfg['model']['hidden_dim'],
-        num_heads=cfg['model']['num_heads'],
-        num_layers=cfg['model']['num_layers'],
-        num_classes=cfg['model']['num_classes'],
-        dropout=cfg['model']['dropout']
-    ).to(device)
-    
-
+            input_dim=input_dim1,
+            hidden_dim=cfg['model']['hidden_dim'],
+            num_heads=cfg['model']['num_heads'],
+            num_layers=cfg['model']['num_layers'],
+            num_classes=cfg['model']['num_classes'],
+            dropout=cfg['model']['dropout']
+        ).to(device)
+    else:
+        model = LSTM_GMP(
+            input_dim=input_dim1,
+            hidden_dim=cfg['model']['hidden_dim'],
+            num_layers=cfg['model']['num_layers'],
+            num_classes=cfg['model']['num_classes'],
+            dropout=cfg['model']['dropout']
+        ).to(device)
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -187,6 +178,34 @@ def main():
     test_loss, test_acc, _, _, _ = evaluate(model, test_loader, device, criterion)
     print(f"\n⭐ 最终测试集准确率: {test_acc:.2f}% ⭐")
 
+    # ========================
+    # 👇 只在这里加：最优模型计算召回率（完全不改动你之前逻辑）
+    # ========================
+    print("\n========== 最优模型 - 测试集 召回率 / 精确率 / F1 ==========")
+    y_true = []
+    y_pred = []
+    model.eval()
+    with torch.no_grad():
+        for x, label in test_loader:
+            x = x.to(device)
+            out = model(x)
+            pred = torch.argmax(out, dim=1)
+            y_true.extend(label.cpu().numpy())
+            y_pred.extend(pred.cpu().numpy())
+
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+
+    recall = recall_score(y_true, y_pred, average='macro')
+    precision = precision_score(y_true, y_pred, average='macro')
+    f1 = f1_score(y_true, y_pred, average='macro')
+
+    print(f"✅ 精确率 (Precision): {precision:.4f}")
+    print(f"✅ 召回率 (Recall)   : {recall:.4f}")    # 老师要的！
+    print(f"✅ F1分数           : {f1:.4f}")
+
+    print("\n===== 每个动作详细指标 =====")
+    print(classification_report(y_true, y_pred, target_names=classes, digits=4))
 
 if __name__ == "__main__":
     main()

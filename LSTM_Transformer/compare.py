@@ -11,12 +11,14 @@ from email.utils import formatdate
 from email import encoders
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score
 import warnings
 warnings.filterwarnings('ignore')
 
 from src.dataset import CSIDataset
 from src.model_LSTMTransformer import LSTMTransformer
+from src.model_LSTMGMP import  LSTM_GMP
+from src.model_LSTM  import LSTMModel
 from src.utils import set_seed, collect_files, split_dataset
 
 # ===================== 邮箱 =====================
@@ -27,23 +29,12 @@ SENDER_PASSWORD = "ozvctjacpnfgdehe"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
 # ===================== 🔥 双显卡加速 =====================
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # 启用两张显卡
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ===================== 20组STFT参数 =====================
 STFT_PARAMS = [
-    (2, 0),
-      (2, 1),
-    (4, 1), (4, 2),
-    (8, 2), (8, 4),
-    (10, 3), (10, 5),
-    (12, 4), (12, 6),
-    (16, 4), (16, 8),
-    (20, 5), (20, 10),
-    (24, 8), (24, 12),
-    (32, 8), (32, 16),
-    (48, 16), (48, 24),
-    (64, 16), (64, 32),
+    (2, 1),
 ]
 
 EXCEL_PATH = "stft_ablation_result.xlsx"
@@ -132,17 +123,16 @@ def main():
         val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
         test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
 
-        model = LSTMTransformer(
+        model = LSTM_GMP(
             input_dim=train_ds[0][0].shape[1],
             hidden_dim=cfg["models"]["lstm_transformer"]["hidden_dim"],
-            num_heads=cfg["models"]["lstm_transformer"]["num_heads"],
+            #num_heads=cfg["models"]["lstm_transformer"]["num_heads"],
             num_layers=cfg["models"]["lstm_transformer"]["num_layers"],
             num_classes=7,
             dropout=cfg["models"]["lstm_transformer"]["dropout"])
         
-        # ===================== 🔥 启用双显卡 =====================
         if torch.cuda.device_count() > 1:
-            model = torch.nn.DataParallel(model)  # 多卡并行
+            model = torch.nn.DataParallel(model)
         model.to(DEVICE)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]))
@@ -182,6 +172,16 @@ def main():
         model.load_state_dict(torch.load(BEST_MODEL_PATH))
         _, t_total_acc, y_true, y_pred = evaluate_full(model, test_loader, DEVICE)
 
+        # ===================== 【新加：Recall + F1 + Precision】 =====================
+        recall = recall_score(y_true, y_pred, average='macro')
+        f1 = f1_score(y_true, y_pred, average='macro')
+        precision = precision_score(y_true, y_pred, average='macro')
+
+        print(f"\n✅ 测试集准确率: {t_total_acc:.4f}")
+        print(f"✅ 精确率: {precision:.4f}")
+        print(f"✅ 召回率: {recall:.4f}")
+        print(f"✅ F1分数: {f1:.4f}\n")
+
         def get_acc(cls):
             mask = y_true == cls
             if not np.any(mask):
@@ -192,6 +192,9 @@ def main():
             "nperseg": nseg,
             "noverlap": novl,
             "total_acc": round(t_total_acc, 4),
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
             "walk": get_acc(0),
             "run": get_acc(1),
             "sitdown": get_acc(2),
@@ -205,11 +208,11 @@ def main():
 
         send_email_with_attachment(
             f"实验{idx}/20完成 | Acc={t_total_acc:.4f}",
-            f"STFT({nseg},{novl}) 已完成",
+            f"STFT({nseg},{novl}) 已完成\n精确率:{precision:.4f}\n召回率:{recall:.4f}\nF1:{f1:.4f}",
             EXCEL_PATH
         )
 
-    send_email_with_attachment("✅ 全部20组实验完成！", "最终表格已生成", EXCEL_PATH)
+    send_email_with_attachment("✅ 全部实验完成！", "最终表格已生成", EXCEL_PATH)
 
 if __name__ == "__main__":
     main()

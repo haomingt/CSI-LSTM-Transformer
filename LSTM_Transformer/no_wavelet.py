@@ -32,17 +32,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ===================== STFT参数 =====================
 STFT_PARAMS = [
-    (2, 0), (2, 1),
-    (4, 1), (4, 2),
-    (8, 2), (8, 4),
-    (10, 3), (10, 5),
-    (12, 4), (12, 6),
-    (16, 4), (16, 8),
-    (20, 5), (20, 10),
-    (24, 8), (24, 12),
-    (32, 8), (32, 16),
-    (48, 16), (48, 24),
-    (64, 16), (64, 32),
+    (2, 1),
 ]
 
 EXCEL_PATH = "stft_ablation_NO_WAVELET.xlsx"  # 无小波结果表
@@ -116,25 +106,28 @@ def main():
         BEST_MODEL_PATH = f"best_no_wavelet_{nseg}_{novl}.pth"
 
         train_ds = CSIDataset(train_files, class_to_idx,
+                              use_wavelet=False,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl,
-             use_wavelet=False)  # ✅ 强制关闭小波
+            use_stft=True, nperseg=nseg, noverlap=novl
+             )  # ✅ 强制关闭小波
 
         val_ds = CSIDataset(val_files, class_to_idx,
+                            use_wavelet=False,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl,
-            use_wavelet=False)  # ✅ 强制关闭小波
+            use_stft=True, nperseg=nseg, noverlap=novl
+            )  # ✅ 强制关闭小波
 
         test_ds = CSIDataset(test_files, class_to_idx,
+                              use_wavelet=False,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl,
-            use_wavelet=False)  # ✅ 强制关闭小波
+            use_stft=True, nperseg=nseg, noverlap=novl
+           )  # ✅ 强制关闭小波
 
         train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
         val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)

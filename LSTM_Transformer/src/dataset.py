@@ -62,17 +62,21 @@ def apply_stft(csi: np.ndarray, nperseg, noverlap, reduce=True) -> np.ndarray:
     return stft_result.astype(np.float32)
 
 class CSIDataset(Dataset):
-    def __init__(self, files: list, class_to_idx: dict,
+    def __init__(self, 
+                  
+                 files: list, class_to_idx: dict,
+                 use_wavelet: bool,
                  max_time_len: int, min_time_len: int,
                  subcarriers: int, augment: bool = False,
                  cache: bool = True,
-                 use_wavelet: bool = True,
+                 
                  wavelet_level: int = 4,
                  wavelet_threshold_mode: str = 'soft',
                  use_stft: bool = True,
                  stft_reduce: bool = True,
-                 nperseg=72, 
-                 noverlap=36):
+                 nperseg=2, 
+                 noverlap=1,
+                ):
         self.files = files
         self.class_to_idx = class_to_idx
         self.target_time_len = (max_time_len + min_time_len) // 2

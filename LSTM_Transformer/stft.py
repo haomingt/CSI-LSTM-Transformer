@@ -3,6 +3,8 @@ import yaml
 import torch
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -10,188 +12,227 @@ from email.mime.text import MIMEText
 from email.utils import formatdate
 from email import encoders
 from torch.utils.data import DataLoader
-
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support
 import warnings
 warnings.filterwarnings('ignore')
 
 from src.dataset import CSIDataset
-from src.train import train_one_epoch, evaluate
-from src.utils import set_seed, collect_files, split_dataset
 from src.model_LSTMTransformer import LSTMTransformer
+from src.utils import set_seed, collect_files, split_dataset
 
-# ===================== 邮箱配置（你自己的） =====================
+# ===================== 邮箱 =====================
 SMTP_SERVER = "smtp.qq.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "2825493439@qq.com"
 SENDER_PASSWORD = "ozvctjacpnfgdehe"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
-# ===================== 全局设置 =====================
+# ===================== 显卡 =====================
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-EXCEL_PATH = "ablation_stft_results.xlsx"
-CLASSES = ["walk", "run", "sitdown", "standup", "fall", "lie_down", "bend"]
 
-# ===================== 发送邮件 =====================
-def send_email(subject, body, attachments):
+# ===================== 实验配置 =====================
+EXCEL_PATH = "ablation_stft_final.xlsx"
+EPOCHS = 1000
+PATIENCE = 800
+BEST_STFT = (2, 1)  # 你默认的最优STFT参数
+
+if os.path.exists(EXCEL_PATH):
+    os.remove(EXCEL_PATH)
+
+# ===================== 评估 =====================
+def evaluate_full(model, loader, device):
+    model.eval()
+    y_true = []
+    y_pred = []
+    with torch.no_grad():
+        for data, lab in loader:
+            data, lab = data.to(device), lab.to(device)
+            out = model(data)
+            pred = torch.argmax(out, dim=1)
+            y_true.append(lab.cpu().numpy())
+            y_pred.append(pred.cpu().numpy())
+    y_true = np.concatenate(y_true)
+    y_pred = np.concatenate(y_pred)
+    acc = accuracy_score(y_true, y_pred)
+    return 0.0, acc, y_true, y_pred
+
+# ===================== 混淆矩阵 =====================
+def plot_cm(y_true, y_pred, classes, save_path):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(10,8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=classes, yticklabels=classes)
+    plt.title('Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
+# ===================== 发邮件 =====================
+def send_email_with_attachment(subject, body, attachment_path):
     try:
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = RECEIVER_EMAIL
         msg['Date'] = formatdate(localtime=True)
         msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'utf-8'))
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        part = MIMEBase('application', 'octet-stream')
+        with open(attachment_path, 'rb') as f:
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(attachment_path)}"')
+        msg.attach(part)
+        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
+        server.quit()
+        print("📩 邮件发送成功")
+    except:
+        print("邮件发送失败")
 
-        for fpath in attachments:
-            if os.path.exists(fpath):
-                part = MIMEBase('application', 'octet-stream')
-                with open(fpath, 'rb') as f:
-                    part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(fpath)}"')
-                msg.attach(part)
-
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        print("📩 邮件发送成功！")
-    except Exception as e:
-        print(f"邮件发送失败：{e}")
-
-# ===================== 保存实验表格 =====================
-def save_excel(results):
-    rows = []
-    for exp_name, res in results.items():
-        row = {
-            "实验": exp_name,
-            "总体准确率": round(res["acc"], 4),
-            "宏观精确率": round(res["macro_p"], 4),
-            "宏观召回率": round(res["macro_r"], 4),
-            "宏观F1": round(res["macro_f1"], 4),
-        }
-        for i, cls in enumerate(CLASSES):
-            row[f"{cls}_精确率"] = round(res["class_p"][i], 4)
-            row[f"{cls}_召回率"] = round(res["class_r"][i], 4)
-            row[f"{cls}_F1"] = round(res["class_f1"][i], 4)
-        rows.append(row)
-    pd.DataFrame(rows).to_excel(EXCEL_PATH, index=False)
+# ===================== 保存Excel =====================
+def save_result_to_excel(results, excel_path):
+    pd.DataFrame(results).to_excel(excel_path, index=False)
 
 # ===================== 运行一组实验 =====================
 def run_exp(cfg, use_stft):
     set_seed(cfg["seed"])
-    exp_name = "with_STFT" if use_stft else "no_STFT"
-    out_dir = f"outputs/{exp_name}"
-    os.makedirs(out_dir, exist_ok=True)
+    classes = cfg["data"]["classes"]
+    class_to_idx = {c:i for i,c in enumerate(classes)}
+    grouped_files = collect_files(cfg["data"]["raw_root"], classes, cfg["data"]["file_ext"])
+    train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
 
-    # 数据加载
-    grouped_files = collect_files(cfg["data"]["raw_root"], CLASSES, cfg["data"]["file_ext"])
-    train_f, val_f, test_f = split_dataset(
-        grouped_files,
-        cfg["data"]["train_split"],
-        cfg["data"]["val_split"],
-        cfg["data"]["test_split"],
-        cfg["seed"]
-    )
+    exp_name = "使用STFT" if use_stft else "不使用STFT"
+    print(f"\n======================================")
+    print(f"🚀 开始实验：{exp_name}")
+    print(f"======================================")
 
-    # 数据集
-    ds_args = dict(
-        class_to_idx={c:i for i,c in enumerate(CLASSES)},
-        max_time_len=cfg["data"]["max_time_len"],
+    BEST_MODEL_PATH = f"best_{'stft' if use_stft else 'nostft'}.pth"
+
+    # 数据集（完全和你最优代码一致）
+    train_ds = CSIDataset(train_files, class_to_idx,
         min_time_len=cfg["data"]["min_time_len"],
+        max_time_len=cfg["data"]["max_time_len"],
         subcarriers=cfg["data"]["subcarriers"],
-        cache=cfg["data"]["cache_in_memory"],
-        use_wavelet=cfg["data"]["use_wavelet"],
-        wavelet_level=cfg["data"]["wavelet_level"],
-        wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-        use_stft=use_stft
-    )
-    train_ds = CSIDataset(train_f, **ds_args, augment=True)
-    val_ds = CSIDataset(val_f, **ds_args, augment=False)
-    test_ds = CSIDataset(test_f, **ds_args, augment=False)
+        use_stft=use_stft,
+        nperseg=BEST_STFT[0], noverlap=BEST_STFT[1])
 
-    # 加载器
-    train_loader = DataLoader(train_ds, batch_size=cfg["training"]["batch_size"], shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=cfg["training"]["batch_size"], shuffle=False)
-    test_loader = DataLoader(test_ds, batch_size=cfg["training"]["batch_size"], shuffle=False)
+    val_ds = CSIDataset(val_files, class_to_idx,
+        min_time_len=cfg["data"]["min_time_len"],
+        max_time_len=cfg["data"]["max_time_len"],
+        subcarriers=cfg["data"]["subcarriers"],
+        use_stft=use_stft,
+        nperseg=BEST_STFT[0], noverlap=BEST_STFT[1])
 
-    # 模型
+    test_ds = CSIDataset(test_files, class_to_idx,
+        min_time_len=cfg["data"]["min_time_len"],
+        max_time_len=cfg["data"]["max_time_len"],
+        subcarriers=cfg["data"]["subcarriers"],
+        use_stft=use_stft,
+        nperseg=BEST_STFT[0], noverlap=BEST_STFT[1])
+
+    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
+
+    # 模型（完全读取config，不写死！）
     model = LSTMTransformer(
-        input_dim=train_ds.feature_dim,
-        hidden_dim=128,
-        num_layers=2,
-        dropout=0.3,
-        num_classes=7
-    ).to(DEVICE)
+        input_dim=train_ds[0][0].shape[1],
+        hidden_dim=cfg["models"]["lstm_transformer"]["hidden_dim"],
+        num_heads=cfg["models"]["lstm_transformer"]["num_heads"],
+        num_layers=cfg["models"]["lstm_transformer"]["num_layers"],
+        num_classes=7,
+        dropout=cfg["models"]["lstm_transformer"]["dropout"])
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["training"]["lr"], weight_decay=float(cfg["training"]["weight_decay"]))
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
+    model.to(DEVICE)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]))
     criterion = torch.nn.CrossEntropyLoss()
-    scaler = torch.amp.GradScaler('cuda', enabled=cfg["training"]["amp"])
-    warmup = cfg["training"]["warmup_epochs"]
 
-    # 训练
     best_acc = 0
     patience = 0
-    model_path = os.path.join(out_dir, "best.pth")
 
-    for epoch in range(cfg["training"]["epochs"]):
-        train_loss, train_acc = train_one_epoch(model, train_loader, DEVICE, criterion, optimizer, scaler, epoch, warmup)
-        val_loss, val_acc, _, _, _ = evaluate(model, val_loader, DEVICE, criterion)
+    # 训练（完全一样）
+    for epoch in range(EPOCHS):
+        model.train()
+        total_loss = 0.0
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
+        for data, lab in pbar:
+            data, lab = data.to(DEVICE), lab.to(DEVICE)
+            optimizer.zero_grad()
+            out = model(data)
+            loss = criterion(out, lab)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
 
-        print(f"[{exp_name}] Epoch {epoch} | train={train_acc:.2f}% | val={val_acc:.2f}%")
+        avg_loss = total_loss / len(train_loader)
+        _, v_acc, _, _ = evaluate_full(model, val_loader, DEVICE)
+        print(f"Epoch {epoch+1} | loss={avg_loss:.4f} | val_acc={v_acc:.4f}")
 
-        if val_acc > best_acc:
-            best_acc = val_acc
+        if v_acc > best_acc:
+            best_acc = v_acc
             patience = 0
-            torch.save(model.state_dict(), model_path)
+            torch.save(model.state_dict(), BEST_MODEL_PATH)
+            print(f"✅ 最优模型已保存")
         else:
-            patience +=1
-            if patience >= cfg["training"]["early_stop_patience"]:
+            patience += 1
+            if patience >= PATIENCE:
                 print("🛑 早停")
                 break
 
     # 测试
-    model.load_state_dict(torch.load(model_path))
-    test_loss, test_acc, y_pred, y_true, report = evaluate(
-        model, test_loader, DEVICE, criterion,
-        classes=CLASSES, save_path=out_dir
-    )
+    model.load_state_dict(torch.load(BEST_MODEL_PATH))
+    _, t_total_acc, y_true, y_pred = evaluate_full(model, test_loader, DEVICE)
+    plot_cm(y_true, y_pred, classes, f"cm_{'stft' if use_stft else 'nostft'}.png")
 
-    # 计算指标
-    macro_p, macro_r, macro_f1, _ = precision_recall_fscore_support(y_true, y_pred, average="macro", zero_division=0)
-    class_p, class_r, class_f1, _ = precision_recall_fscore_support(y_true, y_pred, labels=range(7), zero_division=0)
+    # 每个类别准确率
+    def get_acc(cls):
+        mask = y_true == cls
+        if not np.any(mask):
+            return 0.0
+        return round(accuracy_score(y_true[mask], y_pred[mask]), 4)
 
-    res = {
-        "acc": test_acc/100,
-        "macro_p": macro_p,
-        "macro_r": macro_r,
-        "macro_f1": macro_f1,
-        "class_p": class_p,
-        "class_r": class_r,
-        "class_f1": class_f1,
-        "cm": os.path.join(out_dir, "confusion_matrix.png")
+    row = {
+        "实验": "STFT" if use_stft else "NO_STFT",
+        "total_acc": round(t_total_acc, 4),
+        "walk": get_acc(0),
+        "run": get_acc(1),
+        "sitdown": get_acc(2),
+        "standup": get_acc(3),
+        "fall": get_acc(4),
+        "lie_down": get_acc(5),
+        "bend": get_acc(6)
     }
-    return res
+    return row
 
 # ===================== 主函数 =====================
 def main():
-    with open("config.yaml", "r", encoding="utf-8") as f:
+    with open("configs/config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    results = {}
-    print("\n========== 实验1：使用 STFT ==========")
-    results["with_STFT"] = run_exp(cfg, use_stft=True)
+    results = []
 
-    print("\n========== 实验2：不使用 STFT ==========")
-    results["no_STFT"] = run_exp(cfg, use_stft=False)
+    # 实验1：使用STFT
+    row1 = run_exp(cfg, use_stft=True)
+    results.append(row1)
 
-    # 保存表格
-    save_excel(results)
+    # 实验2：不使用STFT
+    row2 = run_exp(cfg, use_stft=False)
+    results.append(row2)
 
-    # 发邮件
-    send_email(
-        subject="【毕设】STFT消融实验全部完成",
-        body="有无STFT对比结果已生成，包含表格+混淆矩阵",
-        attachments=[EXCEL_PATH, results["with_STFT"]["cm"], results["no_STFT"]["cm"]]
+    # 保存
+    save_result_to_excel(results, EXCEL_PATH)
+
+    send_email_with_attachment(
+        "✅ STFT消融实验【最终正确版】完成",
+        f"STFT: {row1['total_acc']:.2%} | NO_STFT: {row2['total_acc']:.2%}",
+        EXCEL_PATH
     )
 
 if __name__ == "__main__":
