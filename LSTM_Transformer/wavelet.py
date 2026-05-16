@@ -256,7 +256,7 @@ def main():
 
     send_email_with_attachment(
         "【有stft有小波变换】",
-        "（有stft有小波）全部完成",
+        "（有stft有小波）finished",
         EXCEL_PATH
     )
 

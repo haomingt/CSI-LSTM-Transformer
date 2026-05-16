@@ -1,5 +1,5 @@
 data:
-  raw_root: "../data_raw_9"
+  raw_root: "../data_raw_1"
   processed_root: "./data/processed"
   file_ext: ".csv"
   classes: ["walk", "run", "sitdown", "standup", "fall", "lie_down", "bend"]  # 7个动作类别

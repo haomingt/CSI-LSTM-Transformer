@@ -23,7 +23,7 @@ from src.utils import set_seed, collect_files, split_dataset
 SMTP_SERVER = "smtp.qq.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "2825493439@qq.com"
-SENDER_PASSWORD = "ozvctjacpnfgdehe"
+SENDER_PASSWORD = "bgwvvlcbkvhodfeb"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
 # ===================== 🔥 双显卡加速 =====================
@@ -55,7 +55,7 @@ STFT_PARAMS = [
 ]
 
 EXCEL_PATH = "stft_seg_WAVELET.xlsx"  
-EPOCHS = 1000
+EPOCHS = 500
 PATIENCE = 200
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if os.path.exists(EXCEL_PATH):
