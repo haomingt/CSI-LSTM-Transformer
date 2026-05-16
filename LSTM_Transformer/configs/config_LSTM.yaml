@@ -1,5 +1,5 @@
 data:
-  raw_root: "../data_raw_3"
+  raw_root: "../data_raw_9"
   processed_root: "./data/processed"
   file_ext: ".csv"
   classes: ["walk", "run", "sitdown", "standup", "fall", "lie_down", "bend"]  # 7个动作类别
@@ -18,13 +18,13 @@ data:
 model:
   name: "lstm"              # LSTM 专用
   input_dim: 52             # 子载波数量
-  hidden_dim: 64           # 调整隐藏单元，提高表示能力
-  num_layers: 2             # LSTM 层数调为2层，更强建模能力
-  dropout: 0.3              # dropout略微调大，防止过拟合
+  hidden_dim: 128           # 调整隐藏单元，提高表示能力
+  num_layers: 1             # LSTM 层数调为2层，更强建模能力
+  dropout: 0.2             # dropout略微调大，防止过拟合
   num_classes: 7
 
 training:
-  epochs: 1000               # 适当减少训练轮次，加快训练
+  epochs: 200              # 适当减少训练轮次，加快训练
   batch_size: 128            # 增加batch_size，提高训练速度
   lr: 0.0005                # 调低学习率，让训练更稳定
   optimizer: "adamw"

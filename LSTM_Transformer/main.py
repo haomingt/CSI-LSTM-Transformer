@@ -11,7 +11,10 @@ from src.train import train_one_epoch, evaluate
 from src.utils import set_seed, collect_files, split_dataset
 from src.model_LSTM import LSTMModel
 from src.model_LSTMGMP import LSTM_GMP
-from src.utils import set_seed, collect_files, split_dataset
+
+# ✅ 修复 1：缺少 device 定义
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 def main():
     # -----------------------
     # 1. 读取配置
@@ -49,14 +52,15 @@ def main():
         cfg['seed'],
     )
 
-        # ===================== 【仅修改：数据预处理 + 训练验证测试逻辑】 =====================
+    # ===================== 【数据预处理】 =====================
     nseg = 2
     novl = 1
     train_ds = CSIDataset(train_files, class_to_idx,
+                          use_wavelet = False,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_wavelet=cfg["data"]["use_wavelet"],
+           # use_wavelet=cfg["data"]["use_wavelet"],
             wavelet_level=cfg["data"]["wavelet_level"],
             wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
             use_stft=True,
@@ -65,10 +69,11 @@ def main():
         )
 
     val_ds = CSIDataset(val_files, class_to_idx,
+                         use_wavelet = False,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_wavelet=cfg["data"]["use_wavelet"],
+           # use_wavelet=cfg["data"]["use_wavelet"],
             wavelet_level=cfg["data"]["wavelet_level"],
             wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
             use_stft=True,
@@ -77,10 +82,11 @@ def main():
         )
 
     test_ds = CSIDataset(test_files, class_to_idx,
+                          use_wavelet = False,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_wavelet=cfg["data"]["use_wavelet"],
+          #  use_wavelet=cfg["data"]["use_wavelet"],
             wavelet_level=cfg["data"]["wavelet_level"],
             wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
             use_stft=True,
@@ -88,9 +94,9 @@ def main():
             noverlap=novl
         )
 
-    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
-    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_ds, batch_size=64, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_ds, batch_size=64, shuffle=False, num_workers=0)
  
 
     # -----------------------
@@ -127,6 +133,7 @@ def main():
             num_classes=cfg['model']['num_classes'],
             dropout=cfg['model']['dropout']
         ).to(device)
+        
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -134,7 +141,12 @@ def main():
         weight_decay=float(cfg['training']['weight_decay'])
     )
 
-    scaler = torch.amp.GradScaler('cuda', enabled=cfg['training']['amp'])
+    # ✅ 修复 2：低版本 PyTorch 兼容（不支持 torch.amp.GradScaler）
+    try:
+        scaler = torch.amp.GradScaler('cuda', enabled=cfg['training']['amp'])
+    except:
+        scaler = torch.cuda.amp.GradScaler(enabled=cfg['training']['amp'])
+        
     warmup_steps = cfg['training']['warmup_epochs']
 
     # -----------------------
@@ -161,6 +173,9 @@ def main():
             best_val_acc = val_acc
             patience_counter = 0
             save_path = os.path.join(cfg['logging']['out_dir'], "best_model.pth")
+            
+            # ✅ 修复 3：自动创建输出文件夹
+            os.makedirs(cfg['logging']['out_dir'], exist_ok=True)
             torch.save(model.state_dict(), save_path)
             print(f"保存最佳模型 → 验证准确率 {best_val_acc:.2f}%")
         else:
@@ -179,7 +194,7 @@ def main():
     print(f"\n⭐ 最终测试集准确率: {test_acc:.2f}% ⭐")
 
     # ========================
-    # 👇 只在这里加：最优模型计算召回率（完全不改动你之前逻辑）
+    # 最优模型计算召回率 / 精确率 / F1
     # ========================
     print("\n========== 最优模型 - 测试集 召回率 / 精确率 / F1 ==========")
     y_true = []
@@ -196,16 +211,46 @@ def main():
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
 
-    recall = recall_score(y_true, y_pred, average='macro')
-    precision = precision_score(y_true, y_pred, average='macro')
-    f1 = f1_score(y_true, y_pred, average='macro')
+    # ✅ 修复 4：增加 zero_division=0 避免报错
+    recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
+    precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
+    f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
 
     print(f"✅ 精确率 (Precision): {precision:.4f}")
-    print(f"✅ 召回率 (Recall)   : {recall:.4f}")    # 老师要的！
+    print(f"✅ 召回率 (Recall)   : {recall:.4f}")
     print(f"✅ F1分数           : {f1:.4f}")
 
     print("\n===== 每个动作详细指标 =====")
     print(classification_report(y_true, y_pred, target_names=classes, digits=4))
+    # ========================
+# ✅ 在这里自动生成 论文专用混淆矩阵
+# ========================
+    print("\n========== 正在生成混淆矩阵 ==========")
+    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+    import matplotlib.pyplot as plt
 
+# 动作类别（和你代码里的 classes 保持一致）
+    class_names = classes
+
+# 绘制混淆矩阵
+    cm = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
+
+    plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+
+    plt.figure(figsize=(10, 8))
+    disp.plot(cmap=plt.cm.Blues, values_format='d')
+    plt.title("Confusion Matrix (Best Model)", fontsize=14)
+    plt.xlabel("Predicted Label", fontsize=12)
+    plt.ylabel("True Label", fontsize=12)
+    plt.tight_layout()
+
+# 保存高清图（可直接贴论文）
+    plt.savefig(os.path.join(cfg['logging']['out_dir'], "confusion_matrix.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"✅ 混淆矩阵已保存到：{os.path.join(cfg['logging']['out_dir'], 'confusion_matrix.png')}")
+    print(text)
 if __name__ == "__main__":
     main()

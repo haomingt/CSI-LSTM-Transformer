@@ -1,218 +1,169 @@
-import os
-import yaml
 import torch
+import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 import pandas as pd
+import yaml
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import smtplib
+from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
-from email.utils import formatdate
 from email import encoders
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score
-import warnings
-warnings.filterwarnings('ignore')
+import os
+import time
 
-from src.dataset import CSIDataset
+# 你的模型
+from src.model_LSTM import LSTMModel
+from src.model_LSTMGMP import LSTM_GMP
 from src.model_LSTMTransformer import LSTMTransformer
-from src.model_LSTMGMP import  LSTM_GMP
-from src.model_LSTM  import LSTMModel
-from src.utils import set_seed, collect_files, split_dataset
 
-# ===================== 邮箱 =====================
+# 数据集
+from src.dataset import CSIDataset
+from torch.utils.data import DataLoader
+
+# ====================== 加载配置 ======================
+with open("configs/config.yaml", "r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
+
+# ====================== 邮箱 ======================
 SMTP_SERVER = "smtp.qq.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "2825493439@qq.com"
 SENDER_PASSWORD = "ozvctjacpnfgdehe"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
-# ===================== 🔥 双显卡加速 =====================
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# ====================== 实验参数 ======================
+USE_WAVELET = True
+USE_STFT = True
+BEST_STFT = (2, 1)
+EPOCHS = 20
+BATCH_SIZE = 2
 
-# ===================== 20组STFT参数 =====================
-STFT_PARAMS = [
-    (2, 1),
-]
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-EXCEL_PATH = "stft_ablation_result.xlsx"
-EPOCHS = 1000
-PATIENCE = 800
+# ====================== 训练 & 测试 ======================
+def train_and_evaluate(model, train_loader, test_loader):
+    model = model.to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-if os.path.exists(EXCEL_PATH):
-    os.remove(EXCEL_PATH)
+    model.train()
+    for epoch in range(EPOCHS):
+        for x, y in train_loader:
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            loss = criterion(model(x), y)
+            loss.backward()
+            optimizer.step()
 
-# ===================== 评估函数 =====================
-def evaluate_full(model, loader, device):
     model.eval()
-    y_true = []
-    y_pred = []
+    y_true, y_pred = [], []
     with torch.no_grad():
-        for data, lab in loader:
-            data, lab = data.to(device), lab.to(device)
-            out = model(data)
-            pred = torch.argmax(out, dim=1)
-            y_true.append(lab.cpu().numpy())
-            y_pred.append(pred.cpu().numpy())
-    y_true = np.concatenate(y_true)
-    y_pred = np.concatenate(y_pred)
-    acc = accuracy_score(y_true, y_pred)
-    return 0.0, acc, y_true, y_pred
+        for x, y in test_loader:
+            x = x.to(device)
+            p = model(x).argmax(1).cpu()
+            y_true.extend(y.numpy())
+            y_pred.extend(p.numpy())
 
-def send_email_with_attachment(subject, body, attachment_path):
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = SENDER_EMAIL
-        msg['To'] = RECEIVER_EMAIL
-        msg['Date'] = formatdate(localtime=True)
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
-        part = MIMEBase('application', 'octet-stream')
-        with open(attachment_path, 'rb') as f:
-            part.set_payload(f.read())
-        encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(attachment_path)}"')
-        msg.attach(part)
-        server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, average='macro', zero_division=0)
+    rec = recall_score(y_true, y_pred, average='macro', zero_division=0)
+    f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+
+    return round(acc,4), round(prec,4), round(rec,4), round(f1,4)
+
+# ====================== 发邮件 ======================
+def send_email(df):
+    msg = MIMEMultipart()
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = RECEIVER_EMAIL
+    msg["Subject"] = "【毕业设计】多模型对比结果（小波+STFT）"
+
+    text = f"""
+毕业设计：多模型行为识别对比实验
+实验配置：
+• 小波变换：开启
+• STFT参数：nperseg=2, noverlap=1
+• 批次大小：2
+• 训练轮数：20
+
+实验指标（准确率/精确率/召回率/F1）：
+{df.to_string(index=False)}
+
+数据可直接用于毕业论文！
+"""
+    msg.attach(MIMEText(text, "plain", "utf-8"))
+
+    df.to_excel("model_all_metrics.xlsx", index=False)
+
+    with open("model_all_metrics.xlsx", "rb") as f:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment; filename=model_all_metrics.xlsx")
+    msg.attach(part)
+
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        server.quit()
-        print("📩 邮件发送成功")
-    except:
-        print("邮件发送失败")
+    print("✅ 结果已发送到你的QQ邮箱！")
 
-def save_result_to_excel(results, excel_path):
-    pd.DataFrame(results).to_excel(excel_path, index=False)
-
-def main():
-    with open("configs/config.yaml", "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    set_seed(cfg["seed"])
-    classes = cfg["data"]["classes"]
-    class_to_idx = {c:i for i,c in enumerate(classes)}
-    grouped_files = collect_files(cfg["data"]["raw_root"], classes, cfg["data"]["file_ext"])
-    train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
-    results = []
-
-    for idx, (nseg, novl) in enumerate(STFT_PARAMS, 1):
-        print(f"\n==================================================")
-        print(f"🚀 第 {idx}/20 组 | STFT=({nseg},{novl}) | 双显卡训练")
-        print(f"==================================================")
-
-        BEST_MODEL_PATH = f"best_model_{nseg}_{novl}.pth"
-
-        train_ds = CSIDataset(train_files, class_to_idx,
-            min_time_len=cfg["data"]["min_time_len"],
-            max_time_len=cfg["data"]["max_time_len"],
-            subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
-        val_ds = CSIDataset(val_files, class_to_idx,
-            min_time_len=cfg["data"]["min_time_len"],
-            max_time_len=cfg["data"]["max_time_len"],
-            subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
-        test_ds = CSIDataset(test_files, class_to_idx,
-            min_time_len=cfg["data"]["min_time_len"],
-            max_time_len=cfg["data"]["max_time_len"],
-            subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
-
-        train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
-        test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
-
-        model = LSTM_GMP(
-            input_dim=train_ds[0][0].shape[1],
-            hidden_dim=cfg["models"]["lstm_transformer"]["hidden_dim"],
-            #num_heads=cfg["models"]["lstm_transformer"]["num_heads"],
-            num_layers=cfg["models"]["lstm_transformer"]["num_layers"],
-            num_classes=7,
-            dropout=cfg["models"]["lstm_transformer"]["dropout"])
-        
-        if torch.cuda.device_count() > 1:
-            model = torch.nn.DataParallel(model)
-        model.to(DEVICE)
-
-        optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]))
-        criterion = torch.nn.CrossEntropyLoss()
-
-        best_acc = 0
-        patience = 0
-
-        for epoch in range(EPOCHS):
-            model.train()
-            total_loss = 0.0
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
-            for data, lab in pbar:
-                data, lab = data.to(DEVICE), lab.to(DEVICE)
-                optimizer.zero_grad()
-                out = model(data)
-                loss = criterion(out, lab)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-
-            avg_loss = total_loss / len(train_loader)
-            _, v_acc, _, _ = evaluate_full(model, val_loader, DEVICE)
-            print(f"Epoch {epoch+1} | loss={avg_loss:.4f} | val_acc={v_acc:.4f}")
-
-            if v_acc > best_acc:
-                best_acc = v_acc
-                patience = 0
-                torch.save(model.state_dict(), BEST_MODEL_PATH)
-                print(f"✅ 最优模型已保存：{BEST_MODEL_PATH}")
-            else:
-                patience += 1
-                if patience >= PATIENCE:
-                    print("🛑 早停")
-                    break
-
-        model.load_state_dict(torch.load(BEST_MODEL_PATH))
-        _, t_total_acc, y_true, y_pred = evaluate_full(model, test_loader, DEVICE)
-
-        # ===================== 【新加：Recall + F1 + Precision】 =====================
-        recall = recall_score(y_true, y_pred, average='macro')
-        f1 = f1_score(y_true, y_pred, average='macro')
-        precision = precision_score(y_true, y_pred, average='macro')
-
-        print(f"\n✅ 测试集准确率: {t_total_acc:.4f}")
-        print(f"✅ 精确率: {precision:.4f}")
-        print(f"✅ 召回率: {recall:.4f}")
-        print(f"✅ F1分数: {f1:.4f}\n")
-
-        def get_acc(cls):
-            mask = y_true == cls
-            if not np.any(mask):
-                return 0.0
-            return round(accuracy_score(y_true[mask], y_pred[mask]), 4)
-
-        row = {
-            "nperseg": nseg,
-            "noverlap": novl,
-            "total_acc": round(t_total_acc, 4),
-            "precision": round(precision, 4),
-            "recall": round(recall, 4),
-            "f1": round(f1, 4),
-            "walk": get_acc(0),
-            "run": get_acc(1),
-            "sitdown": get_acc(2),
-            "standup": get_acc(3),
-            "fall": get_acc(4),
-            "lie_down": get_acc(5),
-            "bend": get_acc(6)
-        }
-        results.append(row)
-        save_result_to_excel(results, EXCEL_PATH)
-
-        send_email_with_attachment(
-            f"实验{idx}/20完成 | Acc={t_total_acc:.4f}",
-            f"STFT({nseg},{novl}) 已完成\n精确率:{precision:.4f}\n召回率:{recall:.4f}\nF1:{f1:.4f}",
-            EXCEL_PATH
-        )
-
-    send_email_with_attachment("✅ 全部实验完成！", "最终表格已生成", EXCEL_PATH)
-
+# ====================== 主程序 ======================
 if __name__ == "__main__":
-    main()
+    # ==============================================
+    # 这部分是你自己项目里的数据集路径
+    # ==============================================
+    data_cfg = cfg["data"]
+    train_files = data_cfg["train_files"]
+    val_files = data_cfg["val_files"]
+    test_files = data_cfg["test_files"]
+    class_to_idx = data_cfg["class_to_idx"]
+
+    # 数据集（完全按你的写法）
+    train_ds = CSIDataset(
+        train_files, class_to_idx,
+        use_wavelet=True,
+        min_time_len=cfg["data"]["min_time_len"],
+        max_time_len=cfg["data"]["max_time_len"],
+        subcarriers=cfg["data"]["subcarriers"],
+        use_stft=USE_STFT,
+        nperseg=BEST_STFT[0], noverlap=BEST_STFT[1]
+    )
+
+    test_ds = CSIDataset(
+        test_files, class_to_idx,
+        use_wavelet=True,
+        min_time_len=cfg["data"]["min_time_len"],
+        max_time_len=cfg["data"]["max_time_len"],
+        subcarriers=cfg["data"]["subcarriers"],
+        use_stft=USE_STFT,
+        nperseg=BEST_STFT[0], noverlap=BEST_STFT[1]
+    )
+
+    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
+    test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
+
+    # 模型
+    model_list = {
+        "LSTM": LSTMModel(),
+        "LSTMGMP": LSTM_GMP(),
+        "LSTMTransformer": LSTMTransformer(),
+    }
+
+    results = []
+    for name, model in model_list.items():
+        print(f"\n🚀 正在训练：{name}")
+        acc, prec, rec, f1 = train_and_evaluate(model, train_loader, test_loader)
+        results.append([name, acc, prec, rec, f1])
+        print(f"✅ 结果 → Acc={acc}  Prec={prec}  Recall={rec}  F1={f1}")
+
+    df = pd.DataFrame(results, columns=["模型", "准确率", "精确率", "召回率", "F1分数"])
+    df = df.sort_values(by="准确率", ascending=False)
+
+    print("\n" + "="*60)
+    print("📊 最终排名：")
+    print(df.to_string(index=False))
+
+    send_email(df)
+    print("\n🎉 全部完成！已发送至邮箱！")

@@ -1,5 +1,5 @@
 data:
-  raw_root: "../data_raw_1"
+  raw_root: "../data_raw_9"
 
   processed_root: "./data/processed"
   file_ext: ".csv"
@@ -15,7 +15,7 @@ data:
   train_split: 0.75
   val_split: 0.1
   test_split: 0.15
-  cache_in_memory: True
+  cache_in_memory: False
 
 model:
   name: "lstm_transformer"
@@ -27,8 +27,8 @@ model:
   num_classes: 7
 
 training:
-  epochs: 1000
-  batch_size: 100
+  epochs: 100
+  batch_size: 64
   lr: 0.0005
   optimizer: "adamw"
   scheduler: "cosine"

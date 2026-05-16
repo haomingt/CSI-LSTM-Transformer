@@ -27,29 +27,37 @@ SENDER_PASSWORD = "ozvctjacpnfgdehe"
 RECEIVER_EMAIL = "2825493439@qq.com"
 
 # ===================== 🔥 双显卡加速 =====================
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"  # 启用两张显卡
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# ===================== 20组STFT参数 =====================
+# ===================== STFT参数 =====================
 STFT_PARAMS = [
     (2, 0),
-      (2, 1),
-    (4, 1), (4, 2),
-    (8, 2), (8, 4),
-    (10, 3), (10, 5),
-    (12, 4), (12, 6),
-    (16, 4), (16, 8),
-    (20, 5), (20, 10),
-    (24, 8), (24, 12),
-    (32, 8), (32, 16),
-    (48, 16), (48, 24),
-    (64, 16), (64, 32),
+    (2, 1),
+    (4, 1),
+    (4, 2),
+    (8, 2),
+    (8, 4),
+    (10, 3),
+    (10, 5),
+    (12, 4),
+    (12, 6),
+    (16, 4),
+    (16, 8),
+    (20, 5),
+    (20, 10),
+    (24, 8),
+    (24, 12),
+    (32, 8),
+    (32, 16),
+    (48, 16),
+    (48, 24),
 ]
 
-EXCEL_PATH = "stft_ablation_result.xlsx"
+EXCEL_PATH = "stft_seg_WAVELET.xlsx"  
 EPOCHS = 1000
-PATIENCE = 800
-
+PATIENCE = 200
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if os.path.exists(EXCEL_PATH):
     os.remove(EXCEL_PATH)
 
@@ -96,7 +104,7 @@ def save_result_to_excel(results, excel_path):
     pd.DataFrame(results).to_excel(excel_path, index=False)
 
 def main():
-    with open("configs/config.yaml", "r", encoding="utf-8") as f:
+    with open("configs/config_LSTMTransformer.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     set_seed(cfg["seed"])
     classes = cfg["data"]["classes"]
@@ -105,44 +113,97 @@ def main():
     train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
     results = []
 
+    # ===================== ✅ 固定：有小波变换 =====================
+    use_wavelet = True
+    wave_label = "有小波变换"
+
     for idx, (nseg, novl) in enumerate(STFT_PARAMS, 1):
         print(f"\n==================================================")
-        print(f"🚀 第 {idx}/20 组 | STFT=({nseg},{novl}) | 双显卡训练")
+        print(f" 第 {idx}/22 组 | STFT=({nseg},{novl}) | {wave_label} | 双显卡")
         print(f"==================================================")
 
-        BEST_MODEL_PATH = f"best_model_{nseg}_{novl}.pth"
+        BEST_MODEL_PATH = f"configs/best_stft_seg_{nseg}_{novl}.pth"
 
+        # -----------------------
+    # 2. 数据准备
+    # -----------------------
+        classes = cfg['data']['classes']
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+
+        grouped_files = collect_files(
+        cfg['data']['raw_root'],
+        classes,
+        cfg['data']['file_ext']
+    )
+
+        train_files, val_files, test_files = split_dataset(
+        grouped_files,
+        cfg['data']['train_split'],
+        cfg['data']['val_split'],
+        cfg['data']['test_split'],
+        cfg['seed'],
+    )
+
+    # ===================== 【数据预处理】 =====================
         train_ds = CSIDataset(train_files, class_to_idx,
+                          use_wavelet = True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
+           # use_wavelet=cfg["data"]["use_wavelet"],
+            wavelet_level=cfg["data"]["wavelet_level"],
+            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
+            use_stft=True,
+            nperseg=nseg,
+            noverlap=novl
+        )
+
         val_ds = CSIDataset(val_files, class_to_idx,
+                         use_wavelet = True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
+           # use_wavelet=cfg["data"]["use_wavelet"],
+            wavelet_level=cfg["data"]["wavelet_level"],
+            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
+            use_stft=True,
+            nperseg=nseg,
+            noverlap=novl
+        )
+
         test_ds = CSIDataset(test_files, class_to_idx,
+                          use_wavelet = True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
-            use_stft=True, nperseg=nseg, noverlap=novl)
+          #  use_wavelet=cfg["data"]["use_wavelet"],
+            wavelet_level=cfg["data"]["wavelet_level"],
+            wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
+            use_stft=True,
+            nperseg=nseg,
+            noverlap=novl
+        )
 
-        train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=0)
-        test_loader = DataLoader(test_ds, batch_size=2, shuffle=False, num_workers=0)
+        train_loader = DataLoader(train_ds, batch_size=64, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=0)
+        test_loader = DataLoader(test_ds, batch_size=64, shuffle=False, num_workers=0)
+ 
 
+    # -----------------------
+    # 3. 动态确定 STFT 后的输入维度
+    # -----------------------
+        sample_input, _ = train_ds[0]
+        input_dim1 = sample_input.shape[1]   # (T, freq_bins) → freq_bins 是输入维度
         model = LSTMTransformer(
-            input_dim=train_ds[0][0].shape[1],
-            hidden_dim=cfg["models"]["lstm_transformer"]["hidden_dim"],
-            num_heads=cfg["models"]["lstm_transformer"]["num_heads"],
-            num_layers=cfg["models"]["lstm_transformer"]["num_layers"],
-            num_classes=7,
-            dropout=cfg["models"]["lstm_transformer"]["dropout"])
-        
-        # ===================== 🔥 启用双显卡 =====================
+            input_dim=input_dim1,
+            hidden_dim=cfg['model']['hidden_dim'],
+            num_heads=cfg['model']['num_heads'],
+            num_layers=cfg['model']['num_layers'],
+            num_classes=cfg['model']['num_classes'],
+            dropout=cfg['model']['dropout']
+        ).to(device)
         if torch.cuda.device_count() > 1:
-            model = torch.nn.DataParallel(model)  # 多卡并行
+            model = torch.nn.DataParallel(model)
         model.to(DEVICE)
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]))
@@ -191,6 +252,7 @@ def main():
         row = {
             "nperseg": nseg,
             "noverlap": novl,
+            "wavelet": "Yes",
             "total_acc": round(t_total_acc, 4),
             "walk": get_acc(0),
             "run": get_acc(1),
@@ -204,12 +266,16 @@ def main():
         save_result_to_excel(results, EXCEL_PATH)
 
         send_email_with_attachment(
-            f"实验{idx}/20完成 | Acc={t_total_acc:.4f}",
-            f"STFT({nseg},{novl}) 已完成",
+            f"【有小波】实验{idx}/22完成 | Acc={t_total_acc:.4f}",
+            f"STFT({nseg},{novl}) | 有小波变换 | 已完成",
             EXCEL_PATH
         )
 
-    send_email_with_attachment("✅ 全部20组实验完成！", "最终表格已生成", EXCEL_PATH)
+    send_email_with_attachment(
+        "【stft参数】",
+        "（stft选择最优参数）全部完成",
+        EXCEL_PATH
+    )
 
 if __name__ == "__main__":
     main()

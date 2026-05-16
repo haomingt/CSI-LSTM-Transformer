@@ -14,8 +14,7 @@ from tqdm import tqdm
 from sklearn.metrics import accuracy_score
 import warnings
 warnings.filterwarnings('ignore')
-from src.model_LSTM import LSTMModel
-from src.model_LSTMGMP import LSTM_GMP
+
 from src.dataset import CSIDataset
 from src.model_LSTMTransformer import LSTMTransformer
 from src.utils import set_seed, collect_files, split_dataset
@@ -36,7 +35,7 @@ STFT_PARAMS = [
     (2, 1),
 ]
 
-EXCEL_PATH = "stft_ablation_WAVELET.xlsx"  # 无小波结果表
+EXCEL_PATH = "no_stft_ablation_WAVELET.xlsx"  # 没有stft结果表
 EPOCHS = 200
 PATIENCE = 1000
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -86,7 +85,7 @@ def save_result_to_excel(results, excel_path):
     pd.DataFrame(results).to_excel(excel_path, index=False)
 
 def main():
-    with open("configs/config_LSTM.yaml", "r", encoding="utf-8") as f:
+    with open("configs/config_LSTMTransformer.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     set_seed(cfg["seed"])
     classes = cfg["data"]["classes"]
@@ -95,16 +94,16 @@ def main():
     train_files, val_files, test_files = split_dataset(grouped_files, 0.7, 0.15, 0.15)
     results = []
 
-    # ===================== ✅ 固定：无小波变换 =====================
-    use_wavelet = False
-    wave_label = "无小波变换"
+    # ===================== ✅ 固定：有小波变换 =====================
+    use_wavelet = True
+    wave_label = "有stft"
 
     for idx, (nseg, novl) in enumerate(STFT_PARAMS, 1):
         print(f"\n==================================================")
         print(f" 第 {idx}/22 组 | STFT=({nseg},{novl}) | {wave_label} | 双显卡")
         print(f"==================================================")
 
-        BEST_MODEL_PATH = f"configs/LSTM.pth"
+        BEST_MODEL_PATH = f"configs/best_no_stft_{nseg}_{novl}.pth"
 
         # -----------------------
     # 2. 数据准备
@@ -130,40 +129,40 @@ def main():
         nseg = 2
         novl = 1
         train_ds = CSIDataset(train_files, class_to_idx,
-                          use_wavelet = False,
+                          use_wavelet = True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
            # use_wavelet=cfg["data"]["use_wavelet"],
             wavelet_level=cfg["data"]["wavelet_level"],
             wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-            use_stft=True,
+            use_stft=False,
             nperseg=nseg,
             noverlap=novl
         )
 
         val_ds = CSIDataset(val_files, class_to_idx,
-                         use_wavelet = False,
+                         use_wavelet = True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
            # use_wavelet=cfg["data"]["use_wavelet"],
             wavelet_level=cfg["data"]["wavelet_level"],
             wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-            use_stft=True,
+            use_stft=False,
             nperseg=nseg,
             noverlap=novl
         )
 
         test_ds = CSIDataset(test_files, class_to_idx,
-                          use_wavelet = False,
+                          use_wavelet = True,
             min_time_len=cfg["data"]["min_time_len"],
             max_time_len=cfg["data"]["max_time_len"],
             subcarriers=cfg["data"]["subcarriers"],
           #  use_wavelet=cfg["data"]["use_wavelet"],
             wavelet_level=cfg["data"]["wavelet_level"],
             wavelet_threshold_mode=cfg["data"]["wavelet_threshold_mode"],
-            use_stft=True,
+            use_stft=False,
             nperseg=nseg,
             noverlap=novl
         )
@@ -178,10 +177,10 @@ def main():
     # -----------------------
         sample_input, _ = train_ds[0]
         input_dim1 = sample_input.shape[1]   # (T, freq_bins) → freq_bins 是输入维度
-        model = LSTMModel(
+        model = LSTMTransformer(
             input_dim=input_dim1,
             hidden_dim=cfg['model']['hidden_dim'],
-           # num_heads=cfg['model']['num_heads'],
+            num_heads=cfg['model']['num_heads'],
             num_layers=cfg['model']['num_layers'],
             num_classes=cfg['model']['num_classes'],
             dropout=cfg['model']['dropout']
@@ -236,7 +235,7 @@ def main():
         row = {
             "nperseg": nseg,
             "noverlap": novl,
-            "wavelet": "NO",
+            "wavelet": "Yes",
             "total_acc": round(t_total_acc, 4),
             "walk": get_acc(0),
             "run": get_acc(1),
@@ -250,42 +249,16 @@ def main():
         save_result_to_excel(results, EXCEL_PATH)
 
         send_email_with_attachment(
-            f"【无小波】实验{idx}/22完成 | Acc={t_total_acc:.4f}",
-            f"STFT({nseg},{novl}) | 无小波变换 | 已完成",
+            f"【无stft有小波】实验{idx}/22完成 | Acc={t_total_acc:.4f}",
+            f"STFT({nseg},{novl}) | 无stft有小波变换 | 已完成",
             EXCEL_PATH
         )
 
     send_email_with_attachment(
-        "【有stft无小波变换】",
-        "（有stf无小波）全部完成",
+        "✅ 全部22组实验完成！【无stft有小波变换】",
+        "STFT消融实验（无stft有小波）全部完成",
         EXCEL_PATH
     )
-    print("\n========== 正在生成混淆矩阵 ==========")
-    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-    import matplotlib.pyplot as plt
-
-# 动作类别（和你代码里的 classes 保持一致）
-    class_names = classes
-
-# 绘制混淆矩阵
-    cm = confusion_matrix(y_true, y_pred)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_names)
-
-    plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
-    plt.rcParams['axes.unicode_minus'] = False
-
-    plt.figure(figsize=(10, 8))
-    disp.plot(cmap=plt.cm.Blues, values_format='d')
-    plt.title("Confusion Matrix (LSTM)", fontsize=14)
-    plt.xlabel("Predicted Label", fontsize=12)
-    plt.ylabel("True Label", fontsize=12)
-    plt.tight_layout()
-
-# 保存高清图（可直接贴论文）
-    plt.savefig(os.path.join(cfg['logging']['out_dir'], "confusion_matrix.png"), dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"✅ 混淆矩阵已保存到：{os.path.join(cfg['logging']['out_dir'], 'confusion_matrix.png')}")
 
 if __name__ == "__main__":
     main()
